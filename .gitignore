@@ -1,0 +1,28 @@
+# CMake and compiler output
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+
+# Platform build artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Local case data and generated evidence output must not enter source control
+cases/
+recovered/
+*.E0[1-9]
