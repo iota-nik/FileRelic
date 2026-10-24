@@ -23,7 +23,7 @@ cmake --build build
 ./build/filerelic inspect-image /path/to/disk-image.raw
 ```
 
-`CMakeLists.txt` describes how to build the `filerelic` executable. `src/main.cpp` handles `--help`, `--version`, and read-only `inspect-image`. The inspector accepts regular files only, reports their size, and previews up to 16 bytes; it does not mount or modify the file. The `build/` directory contains generated compiler output and is ignored by Git.
+`CMakeLists.txt` describes how to build the `filerelic` executable. `src/main.cpp` handles `--help`, `--version`, and read-only `inspect-image`. The inspector accepts regular files only, reports their size, previews up to 16 bytes, validates all four MBR primary partition entries, and recognizes a few file-system signatures. It reports uncertainty and does not mount or modify the file. The `build/` directory contains generated compiler output and is ignored by Git.
 
 ## Safe practice image
 
