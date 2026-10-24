@@ -20,6 +20,18 @@ The source repository currently contains a minimal C++17 command-line scaffold. 
 cmake -S . -B build
 cmake --build build
 ./build/filerelic --help
+./build/filerelic inspect-image /path/to/disk-image.raw
 ```
 
-`CMakeLists.txt` describes how to build the `filerelic` executable. `src/main.cpp` handles `--help` and `--version`. The `build/` directory contains generated compiler output and is ignored by Git.
+`CMakeLists.txt` describes how to build the `filerelic` executable. `src/main.cpp` handles `--help`, `--version`, and read-only `inspect-image`. The inspector accepts regular files only, reports their size, and previews up to 16 bytes; it does not mount or modify the file. The `build/` directory contains generated compiler output and is ignored by Git.
+
+## Safe practice image
+
+You do not need a real disk image to learn the current command. Generate a 1 MiB synthetic MBR image with no personal data, then inspect it:
+
+```bash
+python3 tools/create_practice_image.py
+./build/filerelic inspect-image testdata/practice-mbr.raw
+```
+
+See [the test-data notes](testdata/README.md) for its exact layout.
