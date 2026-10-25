@@ -23,7 +23,7 @@ MBR
    └─ EBR → logical partition 2 → ...
 ```
 
-FileRelic currently recognizes extended-partition type markers but does not yet walk the EBR chain. GPT is the newer alternative: it keeps its partition entries outside the MBR and commonly supports far more entries.
+FileRelic walks valid EBR chains with a 128-record safety limit, image/extended-container boundary checks, signature checks, and loop detection. GPT is the newer alternative: it keeps its partition entries outside the MBR and commonly supports far more entries.
 
 ## Current scope
 

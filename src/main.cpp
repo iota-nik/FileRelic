@@ -27,6 +27,52 @@ std::uint32_t read_little_endian_u32(const unsigned char* bytes) {
         | (static_cast<std::uint32_t>(bytes[3]) << 24U);
 }
 
+constexpr std::size_t sector_size = 512;
+constexpr std::size_t partition_entry_offset = 446;
+constexpr std::size_t partition_entry_size = 16;
+constexpr std::size_t primary_partition_count = 4;
+
+struct MbrEntry {
+    unsigned char type;
+    std::uint32_t start_sector;
+    std::uint32_t sector_count;
+};
+
+MbrEntry read_partition_entry(const std::array<unsigned char, sector_size>& sector,
+                              std::size_t index) {
+    const std::size_t offset = partition_entry_offset + index * partition_entry_size;
+    return {
+        sector[offset + 4],
+        read_little_endian_u32(sector.data() + offset + 8),
+        read_little_endian_u32(sector.data() + offset + 12),
+    };
+}
+
+bool is_extended_partition(unsigned char type) {
+    return type == 0x05 || type == 0x0f || type == 0x85;
+}
+
+bool is_valid_range(std::uintmax_t file_size,
+                    std::uintmax_t start_byte,
+                    std::uintmax_t length_bytes) {
+    return start_byte <= file_size && length_bytes <= file_size - start_byte;
+}
+
+bool read_sector(std::ifstream& image,
+                 std::uintmax_t file_size,
+                 std::uint64_t sector_number,
+                 std::array<unsigned char, sector_size>& destination) {
+    const std::uintmax_t start_byte = static_cast<std::uintmax_t>(sector_number) * sector_size;
+    if (!is_valid_range(file_size, start_byte, destination.size())) {
+        return false;
+    }
+
+    image.clear();
+    image.seekg(static_cast<std::streamoff>(start_byte));
+    image.read(reinterpret_cast<char*>(destination.data()), destination.size());
+    return image.gcount() == static_cast<std::streamsize>(destination.size());
+}
+
 bool matches_bytes_at(std::ifstream& image,
                       std::uintmax_t file_size,
                       std::uintmax_t offset,
@@ -65,12 +111,105 @@ std::string detect_file_system(std::ifstream& image,
     return "no supported signature found";
 }
 
-void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
-    constexpr std::size_t sector_size = 512;
-    constexpr std::size_t partition_entry_offset = 446;
-    constexpr std::size_t partition_entry_size = 16;
-    constexpr std::size_t partition_count = 4;
+void inspect_extended_partition(std::ifstream& image,
+                                std::uintmax_t file_size,
+                                std::uint32_t extended_start_sector,
+                                std::uint32_t extended_sector_count) {
+    const std::uintmax_t extended_start_byte =
+        static_cast<std::uintmax_t>(extended_start_sector) * sector_size;
+    const std::uintmax_t extended_length_bytes =
+        static_cast<std::uintmax_t>(extended_sector_count) * sector_size;
+    const std::uintmax_t extended_end_byte = extended_start_byte + extended_length_bytes;
 
+    std::cout << "  Status: extended partition; reading EBR chain\n";
+    std::vector<std::uint64_t> visited_ebr_sectors;
+    std::uint64_t current_ebr_sector = extended_start_sector;
+    constexpr std::size_t maximum_ebr_records = 128;
+
+    for (std::size_t record = 0; record < maximum_ebr_records; ++record) {
+        if (std::find(visited_ebr_sectors.begin(), visited_ebr_sectors.end(),
+                      current_ebr_sector) != visited_ebr_sectors.end()) {
+            std::cout << "  Warning: EBR chain contains a loop at sector "
+                      << current_ebr_sector << '\n';
+            return;
+        }
+        visited_ebr_sectors.push_back(current_ebr_sector);
+
+        const std::uintmax_t ebr_start_byte = current_ebr_sector * sector_size;
+        if (!is_valid_range(file_size, ebr_start_byte, sector_size)
+            || ebr_start_byte < extended_start_byte
+            || ebr_start_byte + sector_size > extended_end_byte) {
+            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+                      << " lies outside the extended partition\n";
+            return;
+        }
+
+        std::array<unsigned char, sector_size> ebr{};
+        if (!read_sector(image, file_size, current_ebr_sector, ebr)) {
+            std::cout << "  Warning: could not read EBR at sector "
+                      << current_ebr_sector << '\n';
+            return;
+        }
+        if (ebr[510] != 0x55 || ebr[511] != 0xaa) {
+            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+                      << " has no 55 aa signature\n";
+            return;
+        }
+
+        const MbrEntry logical_entry = read_partition_entry(ebr, 0);
+        const MbrEntry next_ebr_entry = read_partition_entry(ebr, 1);
+
+        if (logical_entry.type == 0 || logical_entry.sector_count == 0) {
+            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+                      << " has no valid logical-partition entry\n";
+            return;
+        }
+
+        const std::uint64_t logical_start_sector =
+            current_ebr_sector + logical_entry.start_sector;
+        const std::uintmax_t logical_start_byte = logical_start_sector * sector_size;
+        const std::uintmax_t logical_length_bytes =
+            static_cast<std::uintmax_t>(logical_entry.sector_count) * sector_size;
+        const bool logical_range_is_valid =
+            is_valid_range(file_size, logical_start_byte, logical_length_bytes)
+            && logical_start_byte >= extended_start_byte
+            && logical_start_byte + logical_length_bytes <= extended_end_byte;
+
+        std::cout << "  Logical partition " << record + 1 << ":\n"
+                  << "    Type: 0x" << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned int>(logical_entry.type) << std::dec << '\n'
+                  << "    Starts: sector " << logical_start_sector
+                  << " (byte " << logical_start_byte << ")\n"
+                  << "    Length: " << logical_entry.sector_count
+                  << " sectors (" << logical_length_bytes << " bytes)\n";
+
+        if (!logical_range_is_valid) {
+            std::cout << "    Status: invalid; extends beyond extended-partition boundary\n";
+            return;
+        }
+        std::cout << "    File system: "
+                  << detect_file_system(image, file_size, logical_start_byte) << '\n';
+
+        if (next_ebr_entry.type == 0 && next_ebr_entry.sector_count == 0) {
+            std::cout << "  EBR chain complete\n";
+            return;
+        }
+        if (!is_extended_partition(next_ebr_entry.type)
+            || next_ebr_entry.sector_count == 0) {
+            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+                      << " has an invalid next-EBR entry\n";
+            return;
+        }
+
+        current_ebr_sector = static_cast<std::uint64_t>(extended_start_sector)
+            + next_ebr_entry.start_sector;
+    }
+
+    std::cout << "  Warning: EBR chain exceeded " << maximum_ebr_records
+              << " records; stopped safely\n";
+}
+
+void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
     if (file_size < sector_size) {
         std::cout << "MBR: image is smaller than one sector; not present\n";
         return;
@@ -105,13 +244,11 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
     std::vector<Partition> partitions;
     bool has_invalid_entry = false;
 
-    for (std::size_t index = 0; index < partition_count; ++index) {
-        const std::size_t entry_offset = partition_entry_offset + index * partition_entry_size;
-        const unsigned char type = first_sector[entry_offset + 4];
-        const std::uint32_t start_sector =
-            read_little_endian_u32(first_sector.data() + entry_offset + 8);
-        const std::uint32_t sector_count =
-            read_little_endian_u32(first_sector.data() + entry_offset + 12);
+    for (std::size_t index = 0; index < primary_partition_count; ++index) {
+        const MbrEntry entry = read_partition_entry(first_sector, index);
+        const unsigned char type = entry.type;
+        const std::uint32_t start_sector = entry.start_sector;
+        const std::uint32_t sector_count = entry.sector_count;
 
         if (type == 0 && sector_count == 0) {
             continue;
@@ -172,8 +309,9 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
             continue;
         }
 
-        if (partition.type == 0x05 || partition.type == 0x0f || partition.type == 0x85) {
-            std::cout << "  Status: extended partition; logical partitions are not yet parsed\n";
+        if (is_extended_partition(partition.type)) {
+            inspect_extended_partition(image, file_size, partition.start_sector,
+                                       partition.sector_count);
         } else if (partition.type == 0xee) {
             const bool gpt_header_found = matches_bytes_at(image, file_size, sector_size, "EFI PART");
             std::cout << "  Status: GPT protective partition"
