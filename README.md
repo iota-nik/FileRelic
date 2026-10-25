@@ -5,6 +5,7 @@ Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, 
 ## Start here
 
 - [Development plan and agent work allocation](docs/DEVELOPMENT_PLAN.md)
+- [MBR detection and validation rules](docs/MBR_VALIDATION.md)
 - [Original project proposal](references/ORIGINAL_PROJECT_PROPOSAL.pdf)
 - [Supplied diagrams](references/diagrams/)
 

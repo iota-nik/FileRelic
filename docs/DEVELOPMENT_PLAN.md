@@ -14,7 +14,7 @@ The project owner is learning the workflow while building. Keep the work increme
 2. **10–20: Build a tiny C++ program.** Learn source files, headers, compiler errors, and the difference between building and running. Make a `filerelic --version` command.
 3. **20–30: CMake and Qt shell.** Learn that CMake configures the build while the compiler builds it. Create the same tiny program as a Qt Widgets desktop window; keep the CLI target too.
 4. **30–40: Raw images and safe reads.** Learn what a disk image is, offsets/bytes, bounds checks, and why the source stays read-only. Implement `inspect-image` for a small generated raw image.
-5. **40–50: Partitions and fake adapter.** Learn MBR/GPT partition tables and an adapter boundary using a fake file system. Connect source → job → CLI output before adding real parser complexity.
+5. **40–50: Partitions and fake adapter.** Learn MBR/GPT partition tables and an adapter boundary using a fake file system. Apply the [MBR validation rules](MBR_VALIDATION.md) and connect source → job → CLI output before adding real parser complexity.
 6. **50–60: First real parser.** Integrate TSK for one tractable fixture and first enumerate files/metadata. Learn the difference between parser support, deleted metadata discovery, and actually reconstructing file bytes.
 7. **60–70: Recovery, status, and hashes.** Add extraction for controlled fixtures. Learn fragmented extents, partial recovery, SHA-256, and why a calculated output hash alone does not prove completeness.
 8. **70–80: Case record and GUI.** Add the versioned manifest/SQLite case data and connect Qt to the same scan service. Learn models, events, asynchronous jobs, cancellation, and UI state.
