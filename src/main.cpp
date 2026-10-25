@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "image_inspector.h"
+
 namespace {
 
 void print_help() {
@@ -330,13 +332,7 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
     }
 }
 
-int inspect_image(int argc, char* argv[]) {
-    if (argc != 3) {
-        std::cerr << "Usage: filerelic inspect-image <path>\n";
-        return 2;
-    }
-
-    const std::filesystem::path image_path(argv[2]);
+int inspect_image_file(const std::filesystem::path& image_path) {
     std::error_code error;
     const bool is_regular_file = std::filesystem::is_regular_file(image_path, error);
     if (error || !is_regular_file) {
@@ -384,6 +380,10 @@ int inspect_image(int argc, char* argv[]) {
 
 } // namespace
 
+int filerelic::inspect_image(const std::filesystem::path& image_path) {
+    return inspect_image_file(image_path);
+}
+
 int main(int argc, char* argv[]) {
     if (argc == 1 || std::string_view(argv[1]) == "--help") {
         print_help();
@@ -396,7 +396,11 @@ int main(int argc, char* argv[]) {
     }
 
     if (std::string_view(argv[1]) == "inspect-image") {
-        return inspect_image(argc, argv);
+        if (argc != 3) {
+            std::cerr << "Usage: filerelic inspect-image <path>\n";
+            return 2;
+        }
+        return filerelic::inspect_image(argv[2]);
     }
 
     std::cerr << "Unknown command: " << argv[1]
