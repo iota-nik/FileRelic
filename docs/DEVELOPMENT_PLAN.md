@@ -6,6 +6,8 @@ Build a desktop application and CLI for examining disk images and recovering fil
 
 This plan is intended to be split across multiple developers or coding agents. Keep interfaces stable, assign one owner per workstream, and integrate through the contracts below.
 
+For the staged project outcome, working-project definition, and timing for specialist agents, see [ROADMAP.md](ROADMAP.md). The project begins with a small verifiable CLI core, grows into a shared recovery engine, and then adds the Qt desktop GUI and cross-platform packaging.
+
 ## Project-owner learning path (build from 0 to 100)
 
 The project owner is learning the workflow while building. Keep the work incremental: explain the idea and the next command before using it, make one small change at a time, then review what changed and what the result means. Use agents to help with bounded tasks, not to hide the code or decisions from the owner.
