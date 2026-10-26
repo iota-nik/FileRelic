@@ -100,17 +100,21 @@ MainWindow::MainWindow(QWidget* parent)
     layout->addWidget(imageCard);
 
     resultsLayout_->setContentsMargins(0, 0, 0, 0);
-    resultsLayout_->setSpacing(10);
+    resultsLayout_->setSpacing(12);
+    resultsLayout_->setAlignment(Qt::AlignTop);
     auto* resultsScroll = new QScrollArea(central);
     resultsScroll->setObjectName("resultsScroll");
     resultsScroll->setWidgetResizable(true);
+    resultsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     resultsScroll->setWidget(resultsContainer_);
 
     rawLog_->setReadOnly(true);
     rawLog_->setObjectName("rawLog");
     rawLog_->setVisible(false);
+    rawLog_->setMinimumHeight(170);
+    rawLog_->setMaximumHeight(260);
     rawLogToggle_->setObjectName("rawLogToggle");
-    rawLogToggle_->setText("Show raw diagnostic log");
+    rawLogToggle_->setText("Advanced: show raw diagnostic log");
     rawLogToggle_->setCheckable(true);
     auto* reportCard = new QFrame(central);
     reportCard->setObjectName("card");
@@ -131,15 +135,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     setStyleSheet(R"(
         QWidget#central { background: #10151d; color: #e7edf5; }
-        QLabel#title { color: #f6f8fb; font-size: 30px; font-weight: 700; }
-        QLabel#subtitle, QLabel#muted { color: #97a6b8; font-size: 14px; }
+        QLabel#title { color: #f6f8fb; font-size: 32px; font-weight: 700; }
+        QLabel#subtitle, QLabel#muted { color: #a9b8c9; font-size: 15px; }
         QLabel#safetyNotice { background: #13342d; border: 1px solid #23634e;
             border-radius: 7px; color: #a9edcc; font-size: 12px; font-weight: 600;
             padding: 10px 12px; }
         QFrame#card { background: #18212c; border: 1px solid #293848; border-radius: 10px; }
-        QLabel#sectionLabel { color: #7ea8d8; font-size: 11px; font-weight: 700; }
-        QLabel#imagePath { color: #f2f5f8; font-family: monospace; font-size: 14px; }
-        QLabel#status { color: #b9c7d6; padding-left: 2px; }
+        QLabel#sectionLabel { color: #8bb9e8; font-size: 12px; font-weight: 700; }
+        QLabel#imagePath { color: #f6f8fb; font-size: 15px; font-weight: 600; }
+        QLabel#status { color: #c1d0de; font-size: 14px; padding-left: 2px; }
         QPushButton { background: #263749; border: 1px solid #38506a; border-radius: 6px;
             color: #e8f0f8; font-weight: 600; padding: 9px 15px; }
         QPushButton:hover { background: #314963; }
@@ -148,12 +152,15 @@ MainWindow::MainWindow(QWidget* parent)
         QPushButton#analyzeButton:hover { background: #2e7db8; }
         QScrollArea#resultsScroll { background: transparent; border: none; }
         QScrollArea#resultsScroll > QWidget > QWidget { background: transparent; }
-        QFrame#resultCard { background: #111923; border: 1px solid #2a3b4d; border-radius: 8px; }
-        QFrame#resultCard[tone="success"] { border-color: #287353; }
-        QFrame#resultCard[tone="warning"] { border-color: #8f6830; }
-        QLabel#resultTitle { color: #dbe9f7; font-size: 14px; font-weight: 700; }
-        QLabel#resultContent { color: #aebfd0; font-family: monospace; font-size: 12px; }
-        QToolButton#rawLogToggle { color: #8eafd0; border: none; padding: 5px 0; text-align: left; }
+        QFrame#resultCard { background: #111923; border: 1px solid #2a3b4d; border-radius: 9px; }
+        QFrame#resultCard[tone="success"] { background: #10231e; border-color: #2b8862; }
+        QFrame#resultCard[tone="warning"] { background: #2b2113; border-color: #b47b2f; }
+        QFrame#resultCard[tone="success"] QLabel#resultTitle { color: #a9edcc; }
+        QFrame#resultCard[tone="warning"] QLabel#resultTitle { color: #ffd18a; }
+        QLabel#resultTitle { color: #edf5fc; font-size: 16px; font-weight: 700; }
+        QLabel#resultContent { color: #c4d1df; font-size: 14px; line-height: 1.35; }
+        QToolButton#rawLogToggle { color: #a8c9e9; border: none; font-size: 13px;
+            font-weight: 600; padding: 7px 0; text-align: left; }
         QPlainTextEdit#rawLog { background: #0c1118; border: 1px solid #273747; border-radius: 6px;
             color: #d9e5f0; font-family: monospace; font-size: 13px; padding: 10px; }
     )");
@@ -165,8 +172,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(process_, &QProcess::finished, this, &MainWindow::inspectionFinished);
     connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
 
-    addResultCard("Ready to inspect", "Choose a disk image and select Analyze image.\n"
-                  "Results will be organized by image, partition layout, and filesystem.");
+    addResultCard("Ready to inspect", "Choose a disk image, then select Analyze image.\n"
+                  "You will see the image, partition layout, filesystem findings, and any warnings here.");
 }
 
 QString MainWindow::cliPath() const {
@@ -240,7 +247,8 @@ void MainWindow::inspectionFinished(int exitCode, QProcess::ExitStatus exitStatu
 
 void MainWindow::toggleRawLog(bool visible) {
     rawLog_->setVisible(visible);
-    rawLogToggle_->setText(visible ? "Hide raw diagnostic log" : "Show raw diagnostic log");
+    rawLogToggle_->setText(visible ? "Advanced: hide raw diagnostic log"
+                                    : "Advanced: show raw diagnostic log");
 }
 
 void MainWindow::clearResults() {
@@ -264,6 +272,7 @@ void MainWindow::addResultCard(const QString& title, const QString& content, con
     auto* body = new QLabel(content, card);
     body->setObjectName("resultContent");
     body->setWordWrap(true);
+    body->setTextFormat(Qt::PlainText);
     body->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(heading);
     layout->addWidget(body);
