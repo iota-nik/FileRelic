@@ -6,10 +6,12 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayoutItem>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
-#include <QTextEdit>
-#include <QTextCursor>
+#include <QScrollArea>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -45,7 +47,10 @@ MainWindow::MainWindow(QWidget* parent)
       status_(new QLabel("Ready — no image data will be modified.", this)),
       chooseButton_(new QPushButton("Choose image", this)),
       analyzeButton_(new QPushButton("Analyze image", this)),
-      report_(new QTextEdit(this)),
+      rawLog_(new QPlainTextEdit(this)),
+      rawLogToggle_(new QToolButton(this)),
+      resultsContainer_(new QWidget(this)),
+      resultsLayout_(new QVBoxLayout(resultsContainer_)),
       process_(new QProcess(this)) {
     setWindowTitle("FileRelic — Disk Image Inspector");
     resize(1000, 700);
@@ -94,21 +99,30 @@ MainWindow::MainWindow(QWidget* parent)
     imageLayout->addLayout(controls);
     layout->addWidget(imageCard);
 
-    report_->setReadOnly(true);
-    report_->setObjectName("report");
-    report_->setPlaceholderText(
-        "Choose an image, then select Analyze image.\n\n"
-        "The inspection report will show partition layout, validation warnings, "
-        "and probable filesystem signatures here.");
+    resultsLayout_->setContentsMargins(0, 0, 0, 0);
+    resultsLayout_->setSpacing(10);
+    auto* resultsScroll = new QScrollArea(central);
+    resultsScroll->setObjectName("resultsScroll");
+    resultsScroll->setWidgetResizable(true);
+    resultsScroll->setWidget(resultsContainer_);
+
+    rawLog_->setReadOnly(true);
+    rawLog_->setObjectName("rawLog");
+    rawLog_->setVisible(false);
+    rawLogToggle_->setObjectName("rawLogToggle");
+    rawLogToggle_->setText("Show raw diagnostic log");
+    rawLogToggle_->setCheckable(true);
     auto* reportCard = new QFrame(central);
     reportCard->setObjectName("card");
     auto* reportLayout = new QVBoxLayout(reportCard);
     reportLayout->setContentsMargins(20, 18, 20, 20);
     reportLayout->setSpacing(10);
-    auto* reportLabel = new QLabel("INSPECTION REPORT", reportCard);
+    auto* reportLabel = new QLabel("INSPECTION RESULTS", reportCard);
     reportLabel->setObjectName("sectionLabel");
     reportLayout->addWidget(reportLabel);
-    reportLayout->addWidget(report_, 1);
+    reportLayout->addWidget(resultsScroll, 1);
+    reportLayout->addWidget(rawLogToggle_);
+    reportLayout->addWidget(rawLog_);
     layout->addWidget(reportCard, 1);
 
     status_->setObjectName("status");
@@ -132,7 +146,15 @@ MainWindow::MainWindow(QWidget* parent)
         QPushButton:disabled { background: #202a35; color: #738193; }
         QPushButton#analyzeButton { background: #236a9f; border-color: #3a8fc9; }
         QPushButton#analyzeButton:hover { background: #2e7db8; }
-        QTextEdit#report { background: #0c1118; border: 1px solid #273747; border-radius: 6px;
+        QScrollArea#resultsScroll { background: transparent; border: none; }
+        QScrollArea#resultsScroll > QWidget > QWidget { background: transparent; }
+        QFrame#resultCard { background: #111923; border: 1px solid #2a3b4d; border-radius: 8px; }
+        QFrame#resultCard[tone="success"] { border-color: #287353; }
+        QFrame#resultCard[tone="warning"] { border-color: #8f6830; }
+        QLabel#resultTitle { color: #dbe9f7; font-size: 14px; font-weight: 700; }
+        QLabel#resultContent { color: #aebfd0; font-family: monospace; font-size: 12px; }
+        QToolButton#rawLogToggle { color: #8eafd0; border: none; padding: 5px 0; text-align: left; }
+        QPlainTextEdit#rawLog { background: #0c1118; border: 1px solid #273747; border-radius: 6px;
             color: #d9e5f0; font-family: monospace; font-size: 13px; padding: 10px; }
     )");
 
@@ -141,6 +163,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(process_, &QProcess::readyReadStandardOutput, this, &MainWindow::appendOutput);
     connect(process_, &QProcess::readyReadStandardError, this, &MainWindow::appendOutput);
     connect(process_, &QProcess::finished, this, &MainWindow::inspectionFinished);
+    connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
+
+    addResultCard("Ready to inspect", "Choose a disk image and select Analyze image.\n"
+                  "Results will be organized by image, partition layout, and filesystem.");
 }
 
 QString MainWindow::cliPath() const {
@@ -173,9 +199,10 @@ void MainWindow::inspectImage(const QString& imagePath) {
     const QFileInfo executable(cliPath());
     if (!executable.isFile() || !executable.isExecutable()) {
         status_->setText("Could not find the filerelic CLI: " + cliPath());
-        report_->setPlainText(
-            "Build FileRelic first, then either place filerelic beside filerelic-gui "
-            "or configure FILERELIC_CLI_PATH while building the GUI.");
+        rawReport_ = "Build FileRelic first, then either place filerelic beside filerelic-gui "
+                     "or configure FILERELIC_CLI_PATH while building the GUI.";
+        rawLog_->setPlainText(rawReport_);
+        renderResults(false);
         return;
     }
 
@@ -183,15 +210,19 @@ void MainWindow::inspectImage(const QString& imagePath) {
     status_->setText("Inspecting read-only…");
     chooseButton_->setEnabled(false);
     analyzeButton_->setEnabled(false);
-    report_->clear();
+    rawReport_.clear();
+    rawLog_->clear();
+    rawLogToggle_->setChecked(false);
+    clearResults();
+    addResultCard("Inspection in progress", "Reading the selected image in read-only mode.");
     process_->setProcessChannelMode(QProcess::SeparateChannels);
     process_->start(cliPath(), {"inspect-image", imagePath});
 }
 
 void MainWindow::appendOutput() {
-    report_->moveCursor(QTextCursor::End);
-    report_->insertPlainText(process_->readAllStandardOutput());
-    report_->insertPlainText(process_->readAllStandardError());
+    rawReport_ += QString::fromUtf8(process_->readAllStandardOutput());
+    rawReport_ += QString::fromUtf8(process_->readAllStandardError());
+    rawLog_->setPlainText(rawReport_);
 }
 
 void MainWindow::inspectionFinished(int exitCode, QProcess::ExitStatus exitStatus) {
@@ -200,7 +231,107 @@ void MainWindow::inspectionFinished(int exitCode, QProcess::ExitStatus exitStatu
     analyzeButton_->setEnabled(!selectedImagePath_.isEmpty());
     if (exitStatus == QProcess::NormalExit && exitCode == 0) {
         status_->setText("Inspection complete — no image data was modified.");
+        renderResults(true);
     } else {
         status_->setText("Inspection failed; see the report for details.");
+        renderResults(false);
     }
+}
+
+void MainWindow::toggleRawLog(bool visible) {
+    rawLog_->setVisible(visible);
+    rawLogToggle_->setText(visible ? "Hide raw diagnostic log" : "Show raw diagnostic log");
+}
+
+void MainWindow::clearResults() {
+    while (QLayoutItem* item = resultsLayout_->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+}
+
+void MainWindow::addResultCard(const QString& title, const QString& content, const QString& tone) {
+    auto* card = new QFrame(resultsContainer_);
+    card->setObjectName("resultCard");
+    if (!tone.isEmpty()) {
+        card->setProperty("tone", tone);
+    }
+    auto* layout = new QVBoxLayout(card);
+    layout->setContentsMargins(14, 12, 14, 12);
+    layout->setSpacing(5);
+    auto* heading = new QLabel(title, card);
+    heading->setObjectName("resultTitle");
+    auto* body = new QLabel(content, card);
+    body->setObjectName("resultContent");
+    body->setWordWrap(true);
+    body->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(heading);
+    layout->addWidget(body);
+    resultsLayout_->insertWidget(resultsLayout_->count(), card);
+}
+
+void MainWindow::renderResults(bool succeeded) {
+    clearResults();
+    const QStringList lines = rawReport_.split('\n', Qt::SkipEmptyParts);
+    QString imageInfo;
+    QString layoutInfo;
+    QStringList warnings;
+    QStringList partitionBlocks;
+    QString currentPartition;
+
+    for (const QString& rawLine : lines) {
+        const QString line = rawLine.trimmed();
+        if (line.startsWith("Image file:") || line.startsWith("Size:")) {
+            imageInfo += line + '\n';
+        }
+        if (line.startsWith("MBR:") || line.startsWith("GPT:")) {
+            layoutInfo += line + '\n';
+        }
+        if (line.contains("warning", Qt::CaseInsensitive)
+            || line.contains("invalid", Qt::CaseInsensitive)
+            || line.startsWith("Error:")) {
+            warnings.append(line);
+        }
+
+        const bool startsPartition = line.startsWith("Partition ")
+            || line.startsWith("Logical partition ")
+            || line.startsWith("GPT partition ");
+        if (startsPartition) {
+            if (!currentPartition.isEmpty()) {
+                partitionBlocks.append(currentPartition);
+            }
+            currentPartition = line + '\n';
+        } else if (!currentPartition.isEmpty()
+                   && (rawLine.startsWith(' ') || rawLine.startsWith('\t'))) {
+            currentPartition += line + '\n';
+        }
+    }
+    if (!currentPartition.isEmpty()) {
+        partitionBlocks.append(currentPartition);
+    }
+
+    addResultCard(succeeded ? "Inspection complete" : "Inspection needs attention",
+                  succeeded ? "Image was inspected read-only. No image data was modified."
+                            : "FileRelic could not complete this inspection. Review warnings or the raw log.",
+                  succeeded ? "success" : "warning");
+    if (!imageInfo.isEmpty()) {
+        addResultCard("Image", imageInfo.trimmed());
+    }
+    if (!layoutInfo.isEmpty()) {
+        addResultCard("Partition layout", layoutInfo.trimmed(),
+                      succeeded ? QStringLiteral("success") : QString{});
+    }
+    for (const QString& partition : partitionBlocks) {
+        const int newline = partition.indexOf('\n');
+        const QString title = newline >= 0 ? partition.left(newline) : "Partition";
+        const QString details = newline >= 0 ? partition.mid(newline + 1).trimmed() : QString{};
+        addResultCard(title, details);
+    }
+    if (!warnings.isEmpty()) {
+        addResultCard("Warnings", warnings.join('\n'), "warning");
+    }
+    if (partitionBlocks.isEmpty() && imageInfo.isEmpty() && !rawReport_.isEmpty()) {
+        addResultCard("Diagnostic", rawReport_.trimmed(), "warning");
+    }
+    resultsLayout_->addStretch();
 }
