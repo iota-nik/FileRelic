@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -583,8 +584,31 @@ int inspect_image_file(const std::filesystem::path& image_path) {
 
 } // namespace
 
-int filerelic::inspect_image(const std::filesystem::path& image_path) {
-    return inspect_image_file(image_path);
+filerelic::InspectionReport filerelic::inspect_image(const std::filesystem::path& image_path) {
+    InspectionReport report{};
+    report.image_path = image_path;
+
+    std::error_code error;
+    report.image_size_bytes = std::filesystem::file_size(image_path, error);
+    if (error) {
+        report.image_size_bytes = 0;
+    }
+
+    // The parser currently emits a detailed text trace. Capture it here so the
+    // CLI and future GUI receive one canonical report object. Later milestones
+    // will add typed partition fields alongside this presentation text.
+    std::ostringstream captured_output;
+    auto* const original_stdout = std::cout.rdbuf(captured_output.rdbuf());
+    auto* const original_stderr = std::cerr.rdbuf(captured_output.rdbuf());
+    report.exit_code = inspect_image_file(image_path);
+    std::cout.rdbuf(original_stdout);
+    std::cerr.rdbuf(original_stderr);
+    report.rendered_text = captured_output.str();
+    return report;
+}
+
+void filerelic::render_report(const InspectionReport& report, std::ostream& output) {
+    output << report.rendered_text;
 }
 
 int main(int argc, char* argv[]) {
@@ -603,7 +627,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "Usage: filerelic inspect-image <path>\n";
             return 2;
         }
-        return filerelic::inspect_image(argv[2]);
+        const auto report = filerelic::inspect_image(argv[2]);
+        filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr);
+        return report.exit_code;
     }
 
     std::cerr << "Unknown command: " << argv[1]
