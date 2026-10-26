@@ -16,7 +16,7 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The current presentation milestone is a read-only raw-image inspector that validates MBR, extended MBR, and GPT partition layouts from safe test images. It identifies probable NTFS, APFS, XFS, ext-family, and Btrfs signatures inside discovered partitions; it does not yet parse folders or recover files. Qt 6 is not detected in the current Linux environment, so the first build uses only the C++ standard library; Qt will be introduced after the shared recovery engine is stable.
+The current presentation milestone is a read-only raw-image inspector that validates MBR, extended MBR, and GPT partition layouts from safe test images. It identifies probable NTFS, APFS, XFS, ext-family, and Btrfs signatures inside discovered partitions, and reads selected ext4 superblock metadata (label, UUID, block/inode sizes, state, and features). It does not yet parse folders or recover files.
 
 ## Build the current scaffold
 

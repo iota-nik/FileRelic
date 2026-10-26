@@ -108,6 +108,34 @@ def create_filesystem_signature_image(
     print(f"Created {output_path} ({len(image)} bytes)")
 
 
+def create_ext4_metadata_image(output_path: Path) -> None:
+    """Create a non-mountable ext4-shaped image with a readable superblock."""
+    image = bytearray(IMAGE_SIZE)
+    partition_start_sector = 1
+    partition_start = partition_start_sector * SECTOR_SIZE
+    write_partition_entry(
+        image, 0, 0, 0x83, partition_start_sector, TOTAL_SECTORS - partition_start_sector
+    )
+    write_mbr_signature(image, 0)
+
+    superblock = bytearray(1024)
+    struct.pack_into("<I", superblock, 0, 128)       # inode count
+    struct.pack_into("<I", superblock, 4, 1024)      # block count (low 32 bits)
+    struct.pack_into("<I", superblock, 24, 0)        # 1024-byte blocks
+    struct.pack_into("<H", superblock, 56, 0xEF53)   # ext-family magic
+    struct.pack_into("<H", superblock, 58, 1)        # cleanly unmounted
+    struct.pack_into("<I", superblock, 76, 1)        # dynamic revision
+    struct.pack_into("<H", superblock, 88, 256)      # inode size
+    struct.pack_into("<I", superblock, 96, 0x40)     # extents incompatibility feature
+    superblock[104:120] = bytes.fromhex("00112233445566778899aabbccddeeff")
+    superblock[120:136] = b"FileRelic ext4".ljust(16, b"\x00")
+    superblock_start = partition_start + 1024
+    image[superblock_start : superblock_start + len(superblock)] = superblock
+
+    output_path.write_bytes(image)
+    print(f"Created {output_path} ({len(image)} bytes)")
+
+
 def build_gpt_header(
     current_lba: int,
     backup_lba: int,
@@ -225,9 +253,7 @@ def main() -> None:
     create_filesystem_signature_image(
         testdata / "practice-fs-xfs.raw", 0, b"XFSB"
     )
-    create_filesystem_signature_image(
-        testdata / "practice-fs-ext4.raw", 1024 + 56, b"\x53\xef"
-    )
+    create_ext4_metadata_image(testdata / "practice-fs-ext4.raw")
     create_filesystem_signature_image(
         testdata / "practice-fs-btrfs.raw", 0x10040, b"_BHRfS_M"
     )

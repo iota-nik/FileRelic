@@ -138,6 +138,97 @@ std::string detect_file_system(std::ifstream& image,
     return "no supported signature found";
 }
 
+bool read_bytes_at(std::ifstream& image,
+                   std::uintmax_t file_size,
+                   std::uintmax_t offset,
+                   unsigned char* destination,
+                   std::size_t length) {
+    if (offset > file_size || length > file_size - offset) {
+        return false;
+    }
+
+    image.clear();
+    image.seekg(static_cast<std::streamoff>(offset));
+    image.read(reinterpret_cast<char*>(destination), static_cast<std::streamsize>(length));
+    return image.gcount() == static_cast<std::streamsize>(length);
+}
+
+std::string read_ascii_field(const unsigned char* bytes, std::size_t length) {
+    std::string value;
+    for (std::size_t index = 0; index < length && bytes[index] != 0; ++index) {
+        const unsigned char character = bytes[index];
+        value.push_back(character >= 32 && character <= 126
+                            ? static_cast<char>(character)
+                            : '?');
+    }
+    return value.empty() ? "(none)" : value;
+}
+
+std::string format_uuid(const unsigned char* uuid) {
+    std::ostringstream formatted;
+    for (std::size_t index = 0; index < 16; ++index) {
+        if (index == 4 || index == 6 || index == 8 || index == 10) {
+            formatted << '-';
+        }
+        formatted << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned int>(uuid[index]);
+    }
+    return formatted.str();
+}
+
+void inspect_ext_superblock(std::ifstream& image,
+                            std::uintmax_t file_size,
+                            std::uintmax_t partition_start) {
+    constexpr std::size_t superblock_offset = 1024;
+    std::array<unsigned char, 1024> superblock{};
+    if (!read_bytes_at(image, file_size, partition_start + superblock_offset,
+                       superblock.data(), superblock.size())) {
+        std::cout << "    ext metadata: could not read complete superblock\n";
+        return;
+    }
+
+    const std::uint32_t log_block_size = read_little_endian_u32(superblock.data() + 24);
+    if (log_block_size > 6) {
+        std::cout << "    ext metadata: invalid block-size exponent\n";
+        return;
+    }
+
+    const std::uint16_t filesystem_state = static_cast<std::uint16_t>(
+        superblock[58] | (static_cast<std::uint16_t>(superblock[59]) << 8U));
+    const std::uint16_t inode_size = static_cast<std::uint16_t>(
+        superblock[88] | (static_cast<std::uint16_t>(superblock[89]) << 8U));
+    const std::uint32_t incompatible_features =
+        read_little_endian_u32(superblock.data() + 96);
+
+    std::cout << "    ext metadata:\n"
+              << "      Volume label: " << read_ascii_field(superblock.data() + 120, 16) << '\n'
+              << "      UUID: " << format_uuid(superblock.data() + 104) << '\n'
+              << "      Block size: " << (1024U << log_block_size) << " bytes\n"
+              << "      Inode size: " << inode_size << " bytes\n"
+              << "      State: ";
+    if (filesystem_state == 1) {
+        std::cout << "cleanly unmounted\n";
+    } else if (filesystem_state == 2) {
+        std::cout << "errors recorded\n";
+    } else {
+        std::cout << "unknown (0x" << std::hex << filesystem_state << std::dec << ")\n";
+    }
+    std::cout << "      Features: "
+              << ((incompatible_features & 0x40U) != 0 ? "extents " : "")
+              << ((incompatible_features & 0x80U) != 0 ? "64-bit " : "")
+              << "(incompatible mask 0x" << std::hex << incompatible_features << std::dec << ")\n";
+}
+
+void print_file_system_report(std::ifstream& image,
+                              std::uintmax_t file_size,
+                              std::uintmax_t partition_start) {
+    const std::string detected = detect_file_system(image, file_size, partition_start);
+    std::cout << detected << '\n';
+    if (detected.find("ext-family") != std::string::npos) {
+        inspect_ext_superblock(image, file_size, partition_start);
+    }
+}
+
 struct GptHeader {
     std::uint32_t header_size;
     std::uint64_t current_lba;
@@ -299,8 +390,8 @@ void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
 
         const std::uintmax_t start_byte = start_lba * sector_size;
         std::cout << "    Length: " << end_lba - start_lba + 1 << " sectors\n"
-                  << "    File system: "
-                  << detect_file_system(image, file_size, start_byte) << '\n';
+                  << "    File system: ";
+        print_file_system_report(image, file_size, start_byte);
         partition_ranges.push_back({start_lba, end_lba});
     }
 
@@ -395,8 +486,8 @@ void inspect_extended_partition(std::ifstream& image,
             std::cout << "    Status: invalid; extends beyond extended-partition boundary\n";
             return;
         }
-        std::cout << "    File system: "
-                  << detect_file_system(image, file_size, logical_start_byte) << '\n';
+        std::cout << "    File system: ";
+        print_file_system_report(image, file_size, logical_start_byte);
 
         if (next_ebr_entry.type == 0 && next_ebr_entry.sector_count == 0) {
             std::cout << "  EBR chain complete\n";
@@ -524,8 +615,8 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
             std::cout << "  Status: GPT protective partition\n";
             inspect_gpt(image, file_size);
         } else {
-            std::cout << "  File system: "
-                      << detect_file_system(image, file_size, partition.start_byte) << '\n';
+            std::cout << "  File system: ";
+            print_file_system_report(image, file_size, partition.start_byte);
         }
     }
 

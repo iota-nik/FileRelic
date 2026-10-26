@@ -14,7 +14,7 @@ Every image is 1 MiB, has a 512-byte Master Boot Record (MBR), contains no real 
 | `practice-fs-ntfs.raw` | Synthetic MBR partition with an NTFS boot-sector signature. |
 | `practice-fs-apfs.raw` | Synthetic MBR partition with an APFS container signature. |
 | `practice-fs-xfs.raw` | Synthetic MBR partition with an XFS superblock signature. |
-| `practice-fs-ext4.raw` | Synthetic MBR partition with ext-family superblock magic. |
+| `practice-fs-ext4.raw` | Synthetic, non-mountable ext4-shaped superblock with label, UUID, block size, and feature fields for parser testing. |
 | `practice-fs-btrfs.raw` | Synthetic MBR partition with a Btrfs superblock signature. |
 
 They are for learning how FileRelic reads an image and validates an MBR table. Generate them from the repository root:
@@ -40,6 +40,7 @@ Then inspect it:
 
 The expected classifications follow the [MBR validation rules](../docs/MBR_VALIDATION.md): the first two images should be reported as likely MBR tables, while the out-of-bounds image must produce an entry-validation warning.
 
-The filesystem fixtures prove signature identification only. A matching magic
-value is evidence, not a full filesystem validation; FileRelic will parse each
-filesystem's metadata in a later milestone.
+The NTFS, APFS, XFS, and Btrfs fixtures prove signature identification only. A
+matching magic value is evidence, not a full filesystem validation. The ext4
+fixture additionally has safe synthetic superblock fields so FileRelic can test
+its first filesystem-metadata reader without mounting an image.
