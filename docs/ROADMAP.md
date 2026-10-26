@@ -21,6 +21,19 @@ This is the minimum project that should be demonstrably useful:
 
 The first supported file systems for meaningful file extraction are ext4 and NTFS. APFS is then added with explicitly documented encryption/snapshot limits. XFS and Btrfs remain experimental until their fixture evidence supports stronger claims.
 
+## Presentation milestone
+
+The immediate goal is a credible, working prototype suitable for demonstration before the full project is complete. It must be honest about its current limits.
+
+- `filerelic inspect-image` examines a raw image without modifying it.
+- It recognizes and validates MBR, extended MBR/EBR chains, and GPT layouts.
+- It lists valid partition boundaries and warns about malformed or out-of-bounds data.
+- It identifies a small set of file-system signatures where they are present.
+- It ships with generated safe practice images that demonstrate valid, invalid, extended, and GPT layouts.
+- It has a short demonstration guide explaining the commands, expected output, and next planned stages.
+
+This is a prototype of a forensic recovery tool, not yet a complete recovery suite. It must not claim that it recovers deleted files until extraction code and controlled-fixture evidence exist.
+
 ## Phases
 
 | Phase | Main result | Learning focus | Agent use |

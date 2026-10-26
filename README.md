@@ -15,7 +15,7 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The source repository currently contains a minimal C++17 command-line scaffold. Qt 6 is not detected in the current Linux environment, so the first build uses only the C++ standard library; Qt will be introduced in a later step after the CLI and core boundaries are clear.
+The current presentation milestone is a read-only raw-image inspector that validates MBR, extended MBR, and GPT partition layouts from safe test images. Qt 6 is not detected in the current Linux environment, so the first build uses only the C++ standard library; Qt will be introduced after the shared recovery engine is stable.
 
 ## Build the current scaffold
 

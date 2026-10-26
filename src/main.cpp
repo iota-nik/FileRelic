@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +28,29 @@ std::uint32_t read_little_endian_u32(const unsigned char* bytes) {
         | (static_cast<std::uint32_t>(bytes[1]) << 8U)
         | (static_cast<std::uint32_t>(bytes[2]) << 16U)
         | (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+std::uint64_t read_little_endian_u64(const unsigned char* bytes) {
+    std::uint64_t value = 0;
+    for (unsigned int index = 0; index < 8; ++index) {
+        value |= static_cast<std::uint64_t>(bytes[index]) << (index * 8U);
+    }
+    return value;
+}
+
+std::uint32_t crc32_ieee(const unsigned char* bytes, std::size_t length) {
+    std::uint32_t crc = 0xffffffffU;
+    for (std::size_t index = 0; index < length; ++index) {
+        crc ^= bytes[index];
+        for (unsigned int bit = 0; bit < 8; ++bit) {
+            const bool low_bit_set = (crc & 1U) != 0;
+            crc >>= 1U;
+            if (low_bit_set) {
+                crc ^= 0xedb88320U;
+            }
+        }
+    }
+    return ~crc;
 }
 
 constexpr std::size_t sector_size = 512;
@@ -111,6 +135,187 @@ std::string detect_file_system(std::ifstream& image,
         return "Btrfs signature";
     }
     return "no supported signature found";
+}
+
+struct GptHeader {
+    std::uint32_t header_size;
+    std::uint64_t current_lba;
+    std::uint64_t backup_lba;
+    std::uint64_t first_usable_lba;
+    std::uint64_t last_usable_lba;
+    std::uint64_t partition_entries_lba;
+    std::uint32_t partition_entry_count;
+    std::uint32_t partition_entry_size;
+    std::uint32_t partition_entries_crc32;
+};
+
+bool read_gpt_header(std::ifstream& image,
+                     std::uintmax_t file_size,
+                     std::uint64_t sector_number,
+                     GptHeader& header,
+                     std::string& error) {
+    std::array<unsigned char, sector_size> sector{};
+    if (!read_sector(image, file_size, sector_number, sector)) {
+        error = "could not read header sector";
+        return false;
+    }
+    if (!std::equal(std::begin(sector), std::begin(sector) + 8, "EFI PART")) {
+        error = "EFI PART signature not found";
+        return false;
+    }
+
+    const std::uint32_t header_size = read_little_endian_u32(sector.data() + 12);
+    if (header_size < 92 || header_size > sector.size()) {
+        error = "invalid header size";
+        return false;
+    }
+
+    const std::uint32_t stored_crc32 = read_little_endian_u32(sector.data() + 16);
+    std::array<unsigned char, sector_size> header_for_crc = sector;
+    std::fill(header_for_crc.begin() + 16, header_for_crc.begin() + 20, 0);
+    if (crc32_ieee(header_for_crc.data(), header_size) != stored_crc32) {
+        error = "header CRC32 does not match";
+        return false;
+    }
+
+    header = {
+        header_size,
+        read_little_endian_u64(sector.data() + 24),
+        read_little_endian_u64(sector.data() + 32),
+        read_little_endian_u64(sector.data() + 40),
+        read_little_endian_u64(sector.data() + 48),
+        read_little_endian_u64(sector.data() + 72),
+        read_little_endian_u32(sector.data() + 80),
+        read_little_endian_u32(sector.data() + 84),
+        read_little_endian_u32(sector.data() + 88),
+    };
+    return true;
+}
+
+std::string read_gpt_name(const unsigned char* entry, std::size_t entry_size) {
+    std::string name;
+    for (std::size_t offset = 56; offset + 1 < entry_size && offset < 128; offset += 2) {
+        const unsigned char low_byte = entry[offset];
+        const unsigned char high_byte = entry[offset + 1];
+        if (low_byte == 0 && high_byte == 0) {
+            break;
+        }
+        name.push_back(high_byte == 0 && low_byte >= 32 && low_byte <= 126
+                           ? static_cast<char>(low_byte)
+                           : '?');
+    }
+    return name.empty() ? "unnamed" : name;
+}
+
+void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
+    constexpr std::size_t maximum_partition_entries = 128;
+    const std::uintmax_t total_sectors = file_size / sector_size;
+    GptHeader primary{};
+    std::string error;
+    if (!read_gpt_header(image, file_size, 1, primary, error)) {
+        std::cout << "  GPT: primary header invalid; " << error << '\n';
+        return;
+    }
+
+    std::cout << "  GPT: primary header valid (CRC32 checked)\n";
+    bool has_warning = false;
+    if (primary.current_lba != 1 || primary.backup_lba >= total_sectors
+        || primary.first_usable_lba > primary.last_usable_lba) {
+        std::cout << "  GPT warning: inconsistent primary-header locations or usable range\n";
+        has_warning = true;
+    }
+
+    GptHeader backup{};
+    if (!read_gpt_header(image, file_size, primary.backup_lba, backup, error)) {
+        std::cout << "  GPT warning: backup header invalid; " << error << '\n';
+        has_warning = true;
+    } else if (backup.current_lba != primary.backup_lba || backup.backup_lba != 1) {
+        std::cout << "  GPT warning: backup header does not point back to primary header\n";
+        has_warning = true;
+    } else {
+        std::cout << "  GPT: backup header valid (CRC32 checked)\n";
+    }
+
+    if (primary.partition_entry_count == 0 || primary.partition_entry_count > maximum_partition_entries
+        || primary.partition_entry_size < 128 || primary.partition_entry_size > 4096) {
+        std::cout << "  GPT warning: unsupported partition-entry count or size\n";
+        return;
+    }
+
+    const std::uintmax_t entries_length =
+        static_cast<std::uintmax_t>(primary.partition_entry_count) * primary.partition_entry_size;
+    const std::uintmax_t entries_start = primary.partition_entries_lba * sector_size;
+    if (!is_valid_range(file_size, entries_start, entries_length)) {
+        std::cout << "  GPT warning: partition-entry array extends beyond image boundary\n";
+        return;
+    }
+
+    std::vector<unsigned char> entries(entries_length);
+    image.clear();
+    image.seekg(static_cast<std::streamoff>(entries_start));
+    image.read(reinterpret_cast<char*>(entries.data()),
+               static_cast<std::streamsize>(entries.size()));
+    if (image.gcount() != static_cast<std::streamsize>(entries.size())) {
+        std::cout << "  GPT warning: could not read complete partition-entry array\n";
+        return;
+    }
+    if (crc32_ieee(entries.data(), entries.size()) != primary.partition_entries_crc32) {
+        std::cout << "  GPT warning: partition-entry array CRC32 does not match\n";
+        return;
+    }
+    std::cout << "  GPT: partition-entry array valid (CRC32 checked)\n";
+
+    struct Range {
+        std::uint64_t start_lba;
+        std::uint64_t end_lba;
+    };
+    std::vector<Range> partition_ranges;
+
+    for (std::size_t index = 0; index < primary.partition_entry_count; ++index) {
+        const unsigned char* entry = entries.data() + index * primary.partition_entry_size;
+        const bool is_unused = std::all_of(entry, entry + 16,
+                                           [](unsigned char byte) { return byte == 0; });
+        if (is_unused) {
+            continue;
+        }
+
+        const std::uint64_t start_lba = read_little_endian_u64(entry + 32);
+        const std::uint64_t end_lba = read_little_endian_u64(entry + 40);
+        const bool range_is_valid = start_lba <= end_lba
+            && start_lba >= primary.first_usable_lba
+            && end_lba <= primary.last_usable_lba
+            && end_lba < total_sectors;
+
+        std::cout << "  GPT partition " << index + 1 << " (" 
+                  << read_gpt_name(entry, primary.partition_entry_size) << "):\n"
+                  << "    Starts: sector " << start_lba << '\n'
+                  << "    Ends: sector " << end_lba << '\n';
+        if (!range_is_valid) {
+            std::cout << "    Status: invalid partition range\n";
+            has_warning = true;
+            continue;
+        }
+
+        const std::uintmax_t start_byte = start_lba * sector_size;
+        std::cout << "    Length: " << end_lba - start_lba + 1 << " sectors\n"
+                  << "    File system: "
+                  << detect_file_system(image, file_size, start_byte) << '\n';
+        partition_ranges.push_back({start_lba, end_lba});
+    }
+
+    for (std::size_t left = 0; left < partition_ranges.size(); ++left) {
+        for (std::size_t right = left + 1; right < partition_ranges.size(); ++right) {
+            const auto& first = partition_ranges[left];
+            const auto& second = partition_ranges[right];
+            if (first.start_lba <= second.end_lba && second.start_lba <= first.end_lba) {
+                std::cout << "  GPT warning: valid partition ranges overlap\n";
+                has_warning = true;
+            }
+        }
+    }
+
+    std::cout << "  GPT: " << (has_warning ? "layout has warnings" : "likely valid layout")
+              << '\n';
 }
 
 void inspect_extended_partition(std::ifstream& image,
@@ -315,10 +520,8 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
             inspect_extended_partition(image, file_size, partition.start_sector,
                                        partition.sector_count);
         } else if (partition.type == 0xee) {
-            const bool gpt_header_found = matches_bytes_at(image, file_size, sector_size, "EFI PART");
-            std::cout << "  Status: GPT protective partition"
-                      << (gpt_header_found ? "; GPT header found" : "; GPT header not found")
-                      << '\n';
+            std::cout << "  Status: GPT protective partition\n";
+            inspect_gpt(image, file_size);
         } else {
             std::cout << "  File system: "
                       << detect_file_system(image, file_size, partition.start_byte) << '\n';
