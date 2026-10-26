@@ -37,6 +37,9 @@ cmake --build build-gui
 ./build-gui/filerelic-gui
 ```
 
+The GUI build deliberately uses only standard CMake automoc support, so it is
+compatible with Qt 6.2 supplied by Ubuntu 22.04 as well as later Qt 6 releases.
+
 `FILERELIC_CLI_PATH` is the absolute path to the core CLI. If omitted, the GUI
 expects `filerelic` beside its own executable.
 

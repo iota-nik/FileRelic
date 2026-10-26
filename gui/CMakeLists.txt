@@ -8,9 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
-qt_standard_project_setup()
+# Use standard CMake automoc support for compatibility with Qt 6.2, which is
+# the version supplied by Ubuntu 22.04. Newer Qt convenience helpers are not
+# required for this small Widgets application.
+set(CMAKE_AUTOMOC ON)
 
-qt_add_executable(filerelic-gui
+add_executable(filerelic-gui
     main.cpp
     main_window.cpp
     main_window.h
