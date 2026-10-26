@@ -8,6 +8,7 @@ Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, 
 - [MBR detection and validation rules](docs/MBR_VALIDATION.md)
 - [Current CLI/GUI architecture](docs/ARCHITECTURE.md)
 - [Project roadmap and agent timing](docs/ROADMAP.md)
+- [Qt desktop-shell build notes](gui/README.md)
 - [Original project proposal](references/ORIGINAL_PROJECT_PROPOSAL.pdf)
 - [Supplied diagrams](references/diagrams/)
 
@@ -15,7 +16,7 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The current presentation milestone is a read-only raw-image inspector that validates MBR, extended MBR, and GPT partition layouts from safe test images. Qt 6 is not detected in the current Linux environment, so the first build uses only the C++ standard library; Qt will be introduced after the shared recovery engine is stable.
+The current presentation milestone is a read-only raw-image inspector that validates MBR, extended MBR, and GPT partition layouts from safe test images. It identifies probable NTFS, APFS, XFS, ext-family, and Btrfs signatures inside discovered partitions; it does not yet parse folders or recover files. Qt 6 is not detected in the current Linux environment, so the first build uses only the C++ standard library; Qt will be introduced after the shared recovery engine is stable.
 
 ## Build the current scaffold
 

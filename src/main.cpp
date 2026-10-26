@@ -119,20 +119,20 @@ std::string detect_file_system(std::ifstream& image,
                                std::uintmax_t file_size,
                                std::uintmax_t partition_start) {
     if (matches_bytes_at(image, file_size, partition_start + 3, "NTFS    ")) {
-        return "NTFS signature";
+        return "probable NTFS (boot-sector signature)";
     }
     if (matches_bytes_at(image, file_size, partition_start + 32, "NXSB")) {
-        return "APFS container signature";
+        return "probable APFS container (NXSB signature)";
     }
     if (matches_bytes_at(image, file_size, partition_start, "XFSB")) {
-        return "XFS signature";
+        return "probable XFS (superblock signature)";
     }
     if (matches_bytes_at(image, file_size, partition_start + 1024 + 56,
                          std::string_view("\x53\xef", 2))) {
-        return "ext-family signature";
+        return "probable ext-family filesystem (ext2/ext3/ext4 magic)";
     }
     if (matches_bytes_at(image, file_size, partition_start + 0x10040, "_BHRfS_M")) {
-        return "Btrfs signature";
+        return "probable Btrfs (superblock signature)";
     }
     return "no supported signature found";
 }

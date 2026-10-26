@@ -87,6 +87,27 @@ def create_extended_partition_image(output_path: Path) -> None:
     print(f"Created {output_path} ({len(image)} bytes)")
 
 
+def create_filesystem_signature_image(
+    output_path: Path, signature_offset: int, signature: bytes
+) -> None:
+    """Create a safe MBR image containing one deliberately placed signature.
+
+    These fixtures are not mountable filesystems. They prove only that the
+    read-only identifier looks at the expected on-disk offset.
+    """
+    image = bytearray(IMAGE_SIZE)
+    partition_start_sector = 1
+    write_partition_entry(
+        image, 0, 0, 0x83, partition_start_sector, TOTAL_SECTORS - partition_start_sector
+    )
+    write_mbr_signature(image, 0)
+
+    signature_start = partition_start_sector * SECTOR_SIZE + signature_offset
+    image[signature_start : signature_start + len(signature)] = signature
+    output_path.write_bytes(image)
+    print(f"Created {output_path} ({len(image)} bytes)")
+
+
 def build_gpt_header(
     current_lba: int,
     backup_lba: int,
@@ -127,7 +148,10 @@ def write_gpt_entry(
     entries[entry_offset : entry_offset + 16] = (
         uuid.UUID("0fc63daf-8483-4772-8e79-3d69d8477de4").bytes_le
     )
-    entries[entry_offset + 16 : entry_offset + 32] = uuid.uuid4().bytes_le
+    # Fixed per-entry GUIDs keep this generated fixture byte-for-byte reproducible.
+    entries[entry_offset + 16 : entry_offset + 32] = uuid.UUID(
+        f"12345678-1234-5678-9abc-def0123456{index:02x}"
+    ).bytes_le
     struct.pack_into("<Q", entries, entry_offset + 32, start_lba)
     struct.pack_into("<Q", entries, entry_offset + 40, end_lba)
     encoded_name = name.encode("utf-16-le")[:72]
@@ -192,6 +216,21 @@ def main() -> None:
     )
     create_extended_partition_image(testdata / "practice-mbr-extended.raw")
     create_gpt_image(testdata / "practice-gpt.raw")
+    create_filesystem_signature_image(
+        testdata / "practice-fs-ntfs.raw", 3, b"NTFS    "
+    )
+    create_filesystem_signature_image(
+        testdata / "practice-fs-apfs.raw", 32, b"NXSB"
+    )
+    create_filesystem_signature_image(
+        testdata / "practice-fs-xfs.raw", 0, b"XFSB"
+    )
+    create_filesystem_signature_image(
+        testdata / "practice-fs-ext4.raw", 1024 + 56, b"\x53\xef"
+    )
+    create_filesystem_signature_image(
+        testdata / "practice-fs-btrfs.raw", 0x10040, b"_BHRfS_M"
+    )
 
 
 if __name__ == "__main__":
