@@ -127,10 +127,30 @@ def create_ext4_metadata_image(output_path: Path) -> None:
     struct.pack_into("<I", superblock, 76, 1)        # dynamic revision
     struct.pack_into("<H", superblock, 88, 256)      # inode size
     struct.pack_into("<I", superblock, 96, 0x40)     # extents incompatibility feature
+    struct.pack_into("<I", superblock, 40, 128)      # inodes per group
     superblock[104:120] = bytes.fromhex("00112233445566778899aabbccddeeff")
     superblock[120:136] = b"FileRelic ext4".ljust(16, b"\x00")
     superblock_start = partition_start + 1024
     image[superblock_start : superblock_start + len(superblock)] = superblock
+
+    # First group descriptor: the inode table begins at filesystem block 5.
+    group_descriptor_start = partition_start + 2 * 1024
+    struct.pack_into("<I", image, group_descriptor_start + 8, 5)
+
+    # Root directory is inode 2, the second 256-byte inode in that table.
+    root_inode_start = partition_start + 5 * 1024 + 256
+    struct.pack_into("<H", image, root_inode_start, 0x41ED)  # directory, 0755
+    struct.pack_into("<I", image, root_inode_start + 4, 1024)
+    struct.pack_into("<I", image, root_inode_start + 40, 10)  # first direct block
+
+    # One conventional ext directory block: inode, record length, name length,
+    # file type, then the name. This is safe synthetic parser data, not a file.
+    directory_start = partition_start + 10 * 1024
+    image[directory_start : directory_start + 12] = struct.pack("<IHBB", 2, 12, 1, 2) + b".\x00\x00\x00"
+    image[directory_start + 12 : directory_start + 24] = struct.pack("<IHBB", 2, 12, 2, 2) + b"..\x00\x00"
+    image[directory_start + 24 : directory_start + 1024] = (
+        struct.pack("<IHBB", 12, 1000, 9, 1) + b"notes.txt" + b"\x00" * 983
+    )
 
     output_path.write_bytes(image)
     print(f"Created {output_path} ({len(image)} bytes)")

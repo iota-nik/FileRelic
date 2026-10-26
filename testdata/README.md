@@ -14,7 +14,7 @@ Every image is 1 MiB, has a 512-byte Master Boot Record (MBR), contains no real 
 | `practice-fs-ntfs.raw` | Synthetic MBR partition with an NTFS boot-sector signature. |
 | `practice-fs-apfs.raw` | Synthetic MBR partition with an APFS container signature. |
 | `practice-fs-xfs.raw` | Synthetic MBR partition with an XFS superblock signature. |
-| `practice-fs-ext4.raw` | Synthetic, non-mountable ext4-shaped superblock with label, UUID, block size, and feature fields for parser testing. |
+| `practice-fs-ext4.raw` | Synthetic, non-mountable ext4-shaped image with superblock metadata and a root directory containing `notes.txt` for parser testing. |
 | `practice-fs-btrfs.raw` | Synthetic MBR partition with a Btrfs superblock signature. |
 
 They are for learning how FileRelic reads an image and validates an MBR table. Generate them from the repository root:

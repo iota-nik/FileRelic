@@ -20,8 +20,11 @@ void print_help() {
               << "Usage:\n"
               << "  filerelic --version   Print the application version\n"
               << "  filerelic --help      Show this help\n"
+              << "  filerelic inspect <path>\n"
+              << "                       Inspect a regular image file read-only\n"
               << "  filerelic inspect-image <path>\n"
-              << "                       Inspect a regular image file read-only\n";
+              << "                       Compatibility name for inspect\n"
+              << "  filerelic demo        Run the bundled safe inspection demonstration\n";
 }
 
 std::uint32_t read_little_endian_u32(const unsigned char* bytes) {
@@ -176,6 +179,92 @@ std::string format_uuid(const unsigned char* uuid) {
     return formatted.str();
 }
 
+struct ExtSuperblockInfo {
+    std::uint32_t block_size;
+    std::uint16_t inode_size;
+};
+
+void inspect_ext_root_directory(std::ifstream& image,
+                                std::uintmax_t file_size,
+                                std::uintmax_t partition_start,
+                                const ExtSuperblockInfo& superblock_info) {
+    constexpr std::uint32_t root_inode_number = 2;
+    const std::uintmax_t group_descriptor_offset = partition_start
+        + (superblock_info.block_size == 1024 ? 2 : 1) * superblock_info.block_size;
+    std::array<unsigned char, 32> group_descriptor{};
+    if (!read_bytes_at(image, file_size, group_descriptor_offset,
+                       group_descriptor.data(), group_descriptor.size())) {
+        std::cout << "    ext root directory: could not read group descriptor\n";
+        return;
+    }
+
+    const std::uint32_t inode_table_block = read_little_endian_u32(group_descriptor.data() + 8);
+    if (inode_table_block == 0 || superblock_info.inode_size < 128
+        || superblock_info.inode_size > superblock_info.block_size) {
+        std::cout << "    ext root directory: unsupported inode-table layout\n";
+        return;
+    }
+
+    const std::uintmax_t root_inode_offset = partition_start
+        + static_cast<std::uintmax_t>(inode_table_block) * superblock_info.block_size
+        + static_cast<std::uintmax_t>(root_inode_number - 1) * superblock_info.inode_size;
+    std::vector<unsigned char> root_inode(superblock_info.inode_size);
+    if (!read_bytes_at(image, file_size, root_inode_offset,
+                       root_inode.data(), root_inode.size())) {
+        std::cout << "    ext root directory: could not read root inode\n";
+        return;
+    }
+
+    const std::uint16_t mode = static_cast<std::uint16_t>(
+        root_inode[0] | (static_cast<std::uint16_t>(root_inode[1]) << 8U));
+    const std::uint32_t inode_flags = read_little_endian_u32(root_inode.data() + 32);
+    if ((mode & 0xf000U) != 0x4000U) {
+        std::cout << "    ext root directory: root inode is not a directory\n";
+        return;
+    }
+    if ((inode_flags & 0x00080000U) != 0) {
+        std::cout << "    ext root directory: extent trees are not supported yet\n";
+        return;
+    }
+
+    const std::uint32_t first_data_block = read_little_endian_u32(root_inode.data() + 40);
+    if (first_data_block == 0) {
+        std::cout << "    ext root directory: no direct data block is present\n";
+        return;
+    }
+    const std::uintmax_t directory_offset = partition_start
+        + static_cast<std::uintmax_t>(first_data_block) * superblock_info.block_size;
+    std::vector<unsigned char> directory_block(superblock_info.block_size);
+    if (!read_bytes_at(image, file_size, directory_offset,
+                       directory_block.data(), directory_block.size())) {
+        std::cout << "    ext root directory: could not read directory block\n";
+        return;
+    }
+
+    std::cout << "    ext root directory (first direct block):\n";
+    std::size_t offset = 0;
+    std::size_t entry_count = 0;
+    while (offset + 8 <= directory_block.size() && entry_count < 64) {
+        const unsigned char* entry = directory_block.data() + offset;
+        const std::uint32_t inode_number = read_little_endian_u32(entry);
+        const std::uint16_t record_length = static_cast<std::uint16_t>(
+            entry[4] | (static_cast<std::uint16_t>(entry[5]) << 8U));
+        const std::size_t name_length = entry[6];
+        if (record_length < 8 || record_length % 4 != 0
+            || record_length > directory_block.size() - offset
+            || name_length > record_length - 8) {
+            std::cout << "      Warning: invalid directory-entry record; stopped safely\n";
+            return;
+        }
+        if (inode_number != 0) {
+            std::cout << "      " << read_ascii_field(entry + 8, name_length)
+                      << " (inode " << inode_number << ")\n";
+            ++entry_count;
+        }
+        offset += record_length;
+    }
+}
+
 void inspect_ext_superblock(std::ifstream& image,
                             std::uintmax_t file_size,
                             std::uintmax_t partition_start) {
@@ -217,6 +306,8 @@ void inspect_ext_superblock(std::ifstream& image,
               << ((incompatible_features & 0x40U) != 0 ? "extents " : "")
               << ((incompatible_features & 0x80U) != 0 ? "64-bit " : "")
               << "(incompatible mask 0x" << std::hex << incompatible_features << std::dec << ")\n";
+    inspect_ext_root_directory(image, file_size, partition_start,
+                               {1024U << log_block_size, inode_size});
 }
 
 void print_file_system_report(std::ifstream& image,
@@ -673,6 +764,57 @@ int inspect_image_file(const std::filesystem::path& image_path) {
     return 0;
 }
 
+std::filesystem::path find_demo_data_directory(const char* executable_path) {
+    std::error_code error;
+    const std::filesystem::path current_candidate = std::filesystem::current_path(error) / "testdata";
+    if (!error && std::filesystem::is_directory(current_candidate, error)) {
+        return current_candidate;
+    }
+
+    const std::filesystem::path executable = std::filesystem::absolute(executable_path, error);
+    if (!error) {
+        const std::filesystem::path build_candidate = executable.parent_path().parent_path() / "testdata";
+        if (std::filesystem::is_directory(build_candidate, error)) {
+            return build_candidate;
+        }
+    }
+    return {};
+}
+
+int run_demo(const char* executable_path) {
+    const std::filesystem::path test_data = find_demo_data_directory(executable_path);
+    if (test_data.empty()) {
+        std::cerr << "Error: could not locate the bundled testdata directory.\n"
+                  << "Run this command from the FileRelic project directory.\n";
+        return 1;
+    }
+
+    const std::array<std::pair<std::string_view, std::string_view>, 9> examples{{
+        {"Valid MBR layout", "practice-mbr.raw"},
+        {"Extended MBR and logical partitions", "practice-mbr-extended.raw"},
+        {"Invalid partition-boundary warning", "practice-mbr-out-of-bounds.raw"},
+        {"GPT primary/backup validation", "practice-gpt.raw"},
+        {"ext4 metadata and root-directory entries", "practice-fs-ext4.raw"},
+        {"NTFS filesystem signature", "practice-fs-ntfs.raw"},
+        {"APFS filesystem signature", "practice-fs-apfs.raw"},
+        {"XFS filesystem signature", "practice-fs-xfs.raw"},
+        {"Btrfs filesystem signature", "practice-fs-btrfs.raw"},
+    }};
+
+    std::cout << "FileRelic safe demonstration\n"
+              << "All images are synthetic and inspected read-only.\n";
+    int result = 0;
+    for (const auto& [title, filename] : examples) {
+        std::cout << "\n=== " << title << " ===\n";
+        const auto report = filerelic::inspect_image(test_data / filename);
+        filerelic::render_report(report, std::cout);
+        if (!report.succeeded()) {
+            result = 1;
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 filerelic::InspectionReport filerelic::inspect_image(const std::filesystem::path& image_path) {
@@ -713,7 +855,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (std::string_view(argv[1]) == "inspect-image") {
+    if (std::string_view(argv[1]) == "inspect-image" || std::string_view(argv[1]) == "inspect") {
         if (argc != 3) {
             std::cerr << "Usage: filerelic inspect-image <path>\n";
             return 2;
@@ -721,6 +863,14 @@ int main(int argc, char* argv[]) {
         const auto report = filerelic::inspect_image(argv[2]);
         filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr);
         return report.exit_code;
+    }
+
+    if (std::string_view(argv[1]) == "demo") {
+        if (argc != 2) {
+            std::cerr << "Usage: filerelic demo\n";
+            return 2;
+        }
+        return run_demo(argv[0]);
     }
 
     std::cerr << "Unknown command: " << argv[1]
