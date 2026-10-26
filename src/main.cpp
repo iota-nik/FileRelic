@@ -182,7 +182,62 @@ std::string format_uuid(const unsigned char* uuid) {
 struct ExtSuperblockInfo {
     std::uint32_t block_size;
     std::uint16_t inode_size;
+    std::uint32_t inodes_per_group;
 };
+
+void inspect_ext_file_inode(std::ifstream& image,
+                            std::uintmax_t file_size,
+                            std::uintmax_t partition_start,
+                            std::uint32_t inode_table_block,
+                            const ExtSuperblockInfo& superblock_info,
+                            std::uint32_t inode_number,
+                            std::string_view name) {
+    // This first adapter handles only the first inode group. Full ext4 support
+    // will select the appropriate group descriptor for larger inode numbers.
+    if (inode_number == 0 || inode_number > superblock_info.inodes_per_group) {
+        std::cout << "        inode metadata: outside the first inode group\n";
+        return;
+    }
+    const std::uintmax_t inode_offset = partition_start
+        + static_cast<std::uintmax_t>(inode_table_block) * superblock_info.block_size
+        + static_cast<std::uintmax_t>(inode_number - 1) * superblock_info.inode_size;
+    std::vector<unsigned char> inode(superblock_info.inode_size);
+    if (!read_bytes_at(image, file_size, inode_offset, inode.data(), inode.size())) {
+        std::cout << "        inode metadata: could not read inode " << inode_number << '\n';
+        return;
+    }
+
+    const std::uint16_t mode = static_cast<std::uint16_t>(
+        inode[0] | (static_cast<std::uint16_t>(inode[1]) << 8U));
+    const std::uint32_t size = read_little_endian_u32(inode.data() + 4);
+    const std::uint32_t flags = read_little_endian_u32(inode.data() + 32);
+    const std::uint16_t type = mode & 0xf000U;
+    std::cout << "        inode metadata for " << name << ": ";
+    if (type == 0x8000U) {
+        std::cout << "regular file\n";
+    } else if (type == 0x4000U) {
+        std::cout << "directory\n";
+    } else if (type == 0xa000U) {
+        std::cout << "symbolic link\n";
+    } else {
+        std::cout << "unsupported type\n";
+        return;
+    }
+    std::cout << "          Size: " << size << " bytes\n";
+    if ((flags & 0x00080000U) != 0) {
+        std::cout << "          Data mapping: extent tree (not decoded yet)\n";
+        return;
+    }
+    const std::uint32_t first_data_block = read_little_endian_u32(inode.data() + 40);
+    if (first_data_block == 0) {
+        std::cout << "          Data mapping: no first direct block\n";
+        return;
+    }
+    std::cout << "          First data block: " << first_data_block
+              << " (byte " << partition_start
+              + static_cast<std::uintmax_t>(first_data_block) * superblock_info.block_size
+              << ")\n";
+}
 
 void inspect_ext_root_directory(std::ifstream& image,
                                 std::uintmax_t file_size,
@@ -259,6 +314,11 @@ void inspect_ext_root_directory(std::ifstream& image,
         if (inode_number != 0) {
             std::cout << "      " << read_ascii_field(entry + 8, name_length)
                       << " (inode " << inode_number << ")\n";
+            const std::string name = read_ascii_field(entry + 8, name_length);
+            if (name != "." && name != "..") {
+                inspect_ext_file_inode(image, file_size, partition_start, inode_table_block,
+                                       superblock_info, inode_number, name);
+            }
             ++entry_count;
         }
         offset += record_length;
@@ -288,6 +348,7 @@ void inspect_ext_superblock(std::ifstream& image,
         superblock[88] | (static_cast<std::uint16_t>(superblock[89]) << 8U));
     const std::uint32_t incompatible_features =
         read_little_endian_u32(superblock.data() + 96);
+    const std::uint32_t inodes_per_group = read_little_endian_u32(superblock.data() + 40);
 
     std::cout << "    ext metadata:\n"
               << "      Volume label: " << read_ascii_field(superblock.data() + 120, 16) << '\n'
@@ -307,7 +368,7 @@ void inspect_ext_superblock(std::ifstream& image,
               << ((incompatible_features & 0x80U) != 0 ? "64-bit " : "")
               << "(incompatible mask 0x" << std::hex << incompatible_features << std::dec << ")\n";
     inspect_ext_root_directory(image, file_size, partition_start,
-                               {1024U << log_block_size, inode_size});
+                               {1024U << log_block_size, inode_size, inodes_per_group});
 }
 
 void print_file_system_report(std::ifstream& image,

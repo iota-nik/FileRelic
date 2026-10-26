@@ -143,6 +143,15 @@ def create_ext4_metadata_image(output_path: Path) -> None:
     struct.pack_into("<I", image, root_inode_start + 4, 1024)
     struct.pack_into("<I", image, root_inode_start + 40, 10)  # first direct block
 
+    # `notes.txt` is inode 12. Its data begins at filesystem block 11.
+    notes_inode_start = partition_start + 5 * 1024 + 11 * 256
+    notes_contents = b"FileRelic synthetic ext4 directory-entry example.\n"
+    struct.pack_into("<H", image, notes_inode_start, 0x81A4)  # regular file, 0644
+    struct.pack_into("<I", image, notes_inode_start + 4, len(notes_contents))
+    struct.pack_into("<I", image, notes_inode_start + 40, 11)  # first direct block
+    notes_data_start = partition_start + 11 * 1024
+    image[notes_data_start : notes_data_start + len(notes_contents)] = notes_contents
+
     # One conventional ext directory block: inode, record length, name length,
     # file type, then the name. This is safe synthetic parser data, not a file.
     directory_start = partition_start + 10 * 1024
