@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # FileRelic Project Workspace
 
 Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, ext4, XFS, and Btrfs file systems.
@@ -41,3 +42,6 @@ python3 tools/create_practice_image.py
 ```
 
 See [the test-data notes](testdata/README.md) for its exact layout.
+=======
+# FileRelic
+>>>>>>> origin/main
