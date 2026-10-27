@@ -7,6 +7,7 @@ Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, 
 - [Development plan and agent work allocation](docs/DEVELOPMENT_PLAN.md)
 - [MBR detection and validation rules](docs/MBR_VALIDATION.md)
 - [Current CLI/GUI architecture](docs/ARCHITECTURE.md)
+- [Implemented class diagram and comparison notes](docs/IMPLEMENTED_CLASS_DIAGRAM.md)
 - [Project roadmap and agent timing](docs/ROADMAP.md)
 - [Qt desktop-shell build notes](gui/README.md)
 - [Original project proposal](references/ORIGINAL_PROJECT_PROPOSAL.pdf)

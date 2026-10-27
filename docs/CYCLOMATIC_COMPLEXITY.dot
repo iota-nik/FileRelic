@@ -1,0 +1,47 @@
+digraph CyclomaticComplexity {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.42",
+    ranksep="0.42",
+    labelloc="t",
+    label="FileRelic: Cyclomatic Complexity of detect_file_system\n\nManual rule: M = decisions + 1     |     Five if decisions → M = 5 + 1 = 6\n\nSix independent test paths: NTFS, APFS, XFS, ext-family, Btrfs, and unknown.",
+    fontsize=20,
+    fontname="Arial"
+  ];
+  node [fontname="Arial", fontsize=12, style="rounded,filled", fillcolor="#eaf4fb", color="#246b9b", penwidth=1.5, margin="0.12,0.08"];
+  edge [fontname="Arial", fontsize=10, color="#334e68", penwidth=1.3];
+
+  start [label="Start", shape=ellipse];
+  ntfs [label="Decision 1\nNTFS signature?", shape=diamond, fillcolor="#fff5d9", color="#b7791f"];
+  apfs [label="Decision 2\nAPFS signature?", shape=diamond, fillcolor="#fff5d9", color="#b7791f"];
+  xfs [label="Decision 3\nXFS signature?", shape=diamond, fillcolor="#fff5d9", color="#b7791f"];
+  ext [label="Decision 4\next-family magic?", shape=diamond, fillcolor="#fff5d9", color="#b7791f"];
+  btrfs [label="Decision 5\nBtrfs signature?", shape=diamond, fillcolor="#fff5d9", color="#b7791f"];
+
+  ret_ntfs [label="Path 1\nreturn NTFS"];
+  ret_apfs [label="Path 2\nreturn APFS"];
+  ret_xfs [label="Path 3\nreturn XFS"];
+  ret_ext [label="Path 4\nreturn ext-family"];
+  ret_btrfs [label="Path 5\nreturn Btrfs"];
+  ret_unknown [label="Path 6\nreturn unknown"];
+
+  start -> ntfs;
+  ntfs -> ret_ntfs [label="yes"];
+  ntfs -> apfs [label="no"];
+  apfs -> ret_apfs [label="yes"];
+  apfs -> xfs [label="no"];
+  xfs -> ret_xfs [label="yes"];
+  xfs -> ext [label="no"];
+  ext -> ret_ext [label="yes"];
+  ext -> btrfs [label="no"];
+  btrfs -> ret_btrfs [label="yes"];
+  btrfs -> ret_unknown [label="no"];
+
+  { rank=same; ntfs; ret_ntfs; }
+  { rank=same; apfs; ret_apfs; }
+  { rank=same; xfs; ret_xfs; }
+  { rank=same; ext; ret_ext; }
+  { rank=same; btrfs; ret_btrfs; }
+}

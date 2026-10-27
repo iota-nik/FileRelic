@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FileRelic: Cyclomatic Complexity</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Arial, sans-serif; color: #16202a; line-height: 1.42; font-size: 11pt; }
+    h1 { color: #164d78; margin-bottom: 3px; }
+    h2 { color: #164d78; border-bottom: 1px solid #b7cddd; padding-bottom: 3px; margin-top: 20px; }
+    .subtitle { color: #5b6874; margin-top: 0; }
+    pre { background: #f3f6f8; border-left: 4px solid #2e78a6; padding: 10px; font-family: "Liberation Mono", monospace; font-size: 9.5pt; white-space: pre-wrap; }
+    .formula { background: #e9f4fa; border: 1px solid #9ac4dd; padding: 10px; font-weight: bold; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+    th, td { border: 1px solid #aebdc9; padding: 7px; vertical-align: top; }
+    th { background: #dcecf5; text-align: left; }
+    .note { background: #fff8df; border-left: 4px solid #d49a20; padding: 8px 10px; }
+    svg { display: block; margin: 12px auto; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>Cyclomatic Complexity: FileRelic Example</h1>
+  <p class="subtitle">Manual calculation for <code>detect_file_system</code></p>
+
+  <h2>1. What cyclomatic complexity measures</h2>
+  <p>Cyclomatic complexity measures the number of independent control-flow paths through a function. It gives a practical lower bound for the number of tests needed to exercise each logical outcome.</p>
+
+  <div class="formula">For one connected function: M = number of decisions + 1</div>
+
+  <p>A decision is normally an <code>if</code>, <code>while</code>, <code>for</code>, or <code>case</code>. This example uses five <code>if</code> decisions.</p>
+
+  <h2>2. Code being measured</h2>
+  <pre>std::string detect_file_system(...) {
+    if (is_ntfs)  return "NTFS";
+    if (is_apfs)  return "APFS";
+    if (is_xfs)   return "XFS";
+    if (is_ext)   return "ext-family";
+    if (is_btrfs) return "Btrfs";
+    return "unknown";
+}</pre>
+
+  <h2>3. Control-flow graph</h2>
+  <svg viewBox="0 0 720 620" xmlns="http://www.w3.org/2000/svg" aria-label="Control flow graph">
+    <defs>
+      <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#334e68"/></marker>
+      <style>.n{fill:#eaf4fb;stroke:#246b9b;stroke-width:2}.d{fill:#fff5d9;stroke:#b7791f;stroke-width:2}.t{font:14px Arial;fill:#172b3a}.s{font:12px Arial;fill:#596b7b}.a{stroke:#334e68;stroke-width:2;fill:none;marker-end:url(#arrow)}</style>
+    </defs>
+    <ellipse class="n" cx="360" cy="28" rx="65" ry="20"/><text class="t" x="342" y="33">Start</text>
+    <path class="a" d="M360 48V72"/>
+    <polygon class="d" points="360,72 455,108 360,144 265,108"/><text class="t" x="329" y="113">NTFS?</text>
+    <path class="a" d="M455 108H585"/><text class="s" x="506" y="100">yes</text><rect class="n" x="585" y="90" width="120" height="36" rx="6"/><text class="t" x="596" y="113">return NTFS</text>
+    <path class="a" d="M360 144V166"/><text class="s" x="370" y="160">no</text>
+    <polygon class="d" points="360,166 455,202 360,238 265,202"/><text class="t" x="329" y="207">APFS?</text>
+    <path class="a" d="M455 202H585"/><text class="s" x="506" y="194">yes</text><rect class="n" x="585" y="184" width="120" height="36" rx="6"/><text class="t" x="595" y="207">return APFS</text>
+    <path class="a" d="M360 238V260"/><text class="s" x="370" y="254">no</text>
+    <polygon class="d" points="360,260 455,296 360,332 265,296"/><text class="t" x="333" y="301">XFS?</text>
+    <path class="a" d="M455 296H585"/><text class="s" x="506" y="288">yes</text><rect class="n" x="585" y="278" width="120" height="36" rx="6"/><text class="t" x="596" y="301">return XFS</text>
+    <path class="a" d="M360 332V354"/><text class="s" x="370" y="348">no</text>
+    <polygon class="d" points="360,354 455,390 360,426 265,390"/><text class="t" x="331" y="395">ext?</text>
+    <path class="a" d="M455 390H585"/><text class="s" x="506" y="382">yes</text><rect class="n" x="585" y="372" width="120" height="36" rx="6"/><text class="t" x="590" y="395">return ext</text>
+    <path class="a" d="M360 426V448"/><text class="s" x="370" y="442">no</text>
+    <polygon class="d" points="360,448 455,484 360,520 265,484"/><text class="t" x="326" y="489">Btrfs?</text>
+    <path class="a" d="M455 484H585"/><text class="s" x="506" y="476">yes</text><rect class="n" x="585" y="466" width="120" height="36" rx="6"/><text class="t" x="590" y="489">return Btrfs</text>
+    <path class="a" d="M360 520V552"/><text class="s" x="370" y="545">no</text><rect class="n" x="292" y="552" width="136" height="36" rx="6"/><text class="t" x="302" y="575">return unknown</text>
+  </svg>
+
+  <h2>4. Hand calculation</h2>
+  <table>
+    <tr><th>Decision number</th><th>Decision</th></tr>
+    <tr><td>1</td><td>Is the partition NTFS?</td></tr>
+    <tr><td>2</td><td>If not NTFS, is it APFS?</td></tr>
+    <tr><td>3</td><td>If not earlier types, is it XFS?</td></tr>
+    <tr><td>4</td><td>If not earlier types, is it ext-family?</td></tr>
+    <tr><td>5</td><td>If not earlier types, is it Btrfs?</td></tr>
+  </table>
+
+  <pre>Number of decisions = 5
+M = decisions + 1
+M = 5 + 1
+M = 6</pre>
+
+  <p><strong>Therefore, the cyclomatic complexity is 6.</strong></p>
+
+  <h2>5. Independent paths / minimum test cases</h2>
+  <table>
+    <tr><th>Path</th><th>Expected result</th></tr>
+    <tr><td>1</td><td>NTFS test is true → return NTFS</td></tr>
+    <tr><td>2</td><td>NTFS false; APFS true → return APFS</td></tr>
+    <tr><td>3</td><td>NTFS/APFS false; XFS true → return XFS</td></tr>
+    <tr><td>4</td><td>Earlier tests false; ext test true → return ext-family</td></tr>
+    <tr><td>5</td><td>Earlier tests false; Btrfs true → return Btrfs</td></tr>
+    <tr><td>6</td><td>All five tests false → return unknown</td></tr>
+  </table>
+
+  <p class="note"><strong>Note:</strong> Some courses count short-circuit Boolean operators such as <code>&amp;&amp;</code> and <code>||</code> as additional decisions. This function has no compound Boolean conditions in its five tests, so the basic hand calculation is unambiguous.</p>
+</body>
+</html>
