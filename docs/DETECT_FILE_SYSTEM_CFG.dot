@@ -1,0 +1,56 @@
+digraph DetectFileSystemCFG {
+  graph [
+    rankdir=TB,
+    splines=polyline,
+    nodesep=0.48,
+    ranksep=0.52,
+    pad=0.25,
+    bgcolor="white",
+    labelloc="t",
+    label="Control-Flow Graph: detect_file_system()\n\nCyclomatic complexity: M = E - N + 2P = 17 - 13 + 2(1) = 6",
+    fontsize=20,
+    fontname="Arial"
+  ];
+  node [fontname="Arial", fontsize=12, style="filled", penwidth=1.5, margin="0.16,0.10"];
+  edge [fontname="Arial", fontsize=11, color="#334e68", penwidth=1.4, arrowsize=0.8];
+
+  start [label="Start", shape=oval, fillcolor="#d9f2e6", color="#31805c"];
+  ntfs [label="D1: NTFS signature?", shape=diamond, fillcolor="#fff2cc", color="#ad7b00"];
+  apfs [label="D2: APFS signature?", shape=diamond, fillcolor="#fff2cc", color="#ad7b00"];
+  xfs [label="D3: XFS signature?", shape=diamond, fillcolor="#fff2cc", color="#ad7b00"];
+  ext [label="D4: ext-family magic?", shape=diamond, fillcolor="#fff2cc", color="#ad7b00"];
+  btrfs [label="D5: Btrfs signature?", shape=diamond, fillcolor="#fff2cc", color="#ad7b00"];
+
+  ret_ntfs [label="Return NTFS", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  ret_apfs [label="Return APFS", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  ret_xfs [label="Return XFS", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  ret_ext [label="Return ext-family", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  ret_btrfs [label="Return Btrfs", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  ret_unknown [label="Return no supported signature", shape=box, style="rounded,filled", fillcolor="#e6f1fa", color="#3677a8"];
+  exit [label="Shared exit", shape=oval, fillcolor="#f2e6fa", color="#8051a3"];
+
+  start -> ntfs;
+  ntfs -> ret_ntfs [label="yes"];
+  ntfs -> apfs [label="no"];
+  apfs -> ret_apfs [label="yes"];
+  apfs -> xfs [label="no"];
+  xfs -> ret_xfs [label="yes"];
+  xfs -> ext [label="no"];
+  ext -> ret_ext [label="yes"];
+  ext -> btrfs [label="no"];
+  btrfs -> ret_btrfs [label="yes"];
+  btrfs -> ret_unknown [label="no"];
+
+  ret_ntfs -> exit;
+  ret_apfs -> exit;
+  ret_xfs -> exit;
+  ret_ext -> exit;
+  ret_btrfs -> exit;
+  ret_unknown -> exit;
+
+  { rank=same; ntfs; ret_ntfs; }
+  { rank=same; apfs; ret_apfs; }
+  { rank=same; xfs; ret_xfs; }
+  { rank=same; ext; ret_ext; }
+  { rank=same; btrfs; ret_btrfs; }
+}

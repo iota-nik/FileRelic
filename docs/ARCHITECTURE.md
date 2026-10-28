@@ -12,26 +12,30 @@ The command-line interface is for repeatable commands, automation, and testing. 
 
 ## Current implementation
 
-- `src/main.cpp` is the CLI front door. It interprets commands such as `inspect-image`.
+- `src/cli_main.cpp` is the CLI front door. It interprets commands such as `inspect-image`.
 - `src/image_inspector.h` declares the callable image-inspection API.
+- `src/image_inspector.cpp` implements that API and is built as `filerelic_core`.
 - `filerelic::inspect_image(path)` opens a file read-only and returns an
   `InspectionReport`. The report owns the source image path, byte size, success
-  status, and the current canonical human-readable inspection text.
+  status, typed partition-table and partition records, filesystem metadata,
+  warnings, presentation sections, and the current human-readable diagnostic
+  trace.
 - `filerelic::render_report(report, output)` is the CLI presentation layer. It
   writes an existing report to a terminal but does not perform parsing itself.
-- `gui/` contains a Qt desktop shell. It currently starts the CLI as a safe
-  temporary bridge; its next integration step is to render `InspectionReport`
-  directly.
+- `gui/` contains a Qt desktop shell linked to the same `filerelic_core`
+  library as the CLI. It calls `inspect_image` on a worker thread and then
+  displays the returned report. It no longer starts a separate CLI process.
 
-The initial report deliberately keeps the detailed report text because it lets
-the existing parser move behind one shared boundary without changing its
-validated output. The next refinement adds typed partition, filesystem, and
-warning objects to `InspectionReport`; then the GUI can show cards and tables
-without interpreting terminal strings.
+The parser now fills typed partition and filesystem records while reading the
+image. The GUI builds cards from those records through `InspectionReport`;
+the CLI keeps its existing text format through the same report object's raw
+trace. The raw trace is written into a per-inspection stream, not by
+redirecting process-wide `std::cout`/`std::cerr`. Future work can replace that
+compatibility trace with renderers over the typed records.
 
 The code remains in a small number of source files while we learn the concepts.
-Later, the inspection implementation will move into a core library target. The
-public API prevents that reorganization from changing how the CLI or GUI asks
+The inspection implementation now builds as a core library target. The public
+API prevents later parser reorganizations from changing how the CLI or GUI asks
 for an inspection.
 
 ## Running the CLI

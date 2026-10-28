@@ -1,6 +1,5 @@
 #include "main_window.h"
 
-#include <QCoreApplication>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -8,23 +7,16 @@
 #include <QLabel>
 #include <QLayoutItem>
 #include <QPlainTextEdit>
-#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <filesystem>
 
 namespace {
-
-QString defaultCliPath() {
-#ifdef FILERELIC_CLI_PATH
-    return QStringLiteral(FILERELIC_CLI_PATH);
-#else
-    // The presentation build can place filerelic-gui next to filerelic.
-    return QCoreApplication::applicationDirPath() + "/filerelic";
-#endif
-}
 
 QString formatSize(qint64 bytes) {
     constexpr qint64 kibibyte = 1024;
@@ -51,7 +43,7 @@ MainWindow::MainWindow(QWidget* parent)
       rawLogToggle_(new QToolButton(this)),
       resultsContainer_(new QWidget(this)),
       resultsLayout_(new QVBoxLayout(resultsContainer_)),
-      process_(new QProcess(this)) {
+      inspectionWatcher_(new QFutureWatcher<filerelic::InspectionReport>(this)) {
     setWindowTitle("FileRelic — Disk Image Inspector");
     resize(1000, 700);
     setMinimumSize(760, 540);
@@ -167,17 +159,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(chooseButton_, &QPushButton::clicked, this, &MainWindow::chooseImage);
     connect(analyzeButton_, &QPushButton::clicked, this, &MainWindow::analyzeImage);
-    connect(process_, &QProcess::readyReadStandardOutput, this, &MainWindow::appendOutput);
-    connect(process_, &QProcess::readyReadStandardError, this, &MainWindow::appendOutput);
-    connect(process_, &QProcess::finished, this, &MainWindow::inspectionFinished);
+    connect(inspectionWatcher_, &QFutureWatcher<filerelic::InspectionReport>::finished,
+            this, &MainWindow::inspectionFinished);
     connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
 
     addResultCard("Ready to inspect", "Choose a disk image, then select Analyze image.\n"
                   "You will see the image, partition layout, filesystem findings, and any warnings here.");
-}
-
-QString MainWindow::cliPath() const {
-    return defaultCliPath();
 }
 
 void MainWindow::chooseImage() {
@@ -203,16 +190,6 @@ void MainWindow::analyzeImage() {
 }
 
 void MainWindow::inspectImage(const QString& imagePath) {
-    const QFileInfo executable(cliPath());
-    if (!executable.isFile() || !executable.isExecutable()) {
-        status_->setText("Could not find the filerelic CLI: " + cliPath());
-        rawReport_ = "Build FileRelic first, then either place filerelic beside filerelic-gui "
-                     "or configure FILERELIC_CLI_PATH while building the GUI.";
-        rawLog_->setPlainText(rawReport_);
-        renderResults(false);
-        return;
-    }
-
     selectedImage_->setText(imagePath);
     status_->setText("Inspecting read-only…");
     chooseButton_->setEnabled(false);
@@ -222,26 +199,29 @@ void MainWindow::inspectImage(const QString& imagePath) {
     rawLogToggle_->setChecked(false);
     clearResults();
     addResultCard("Inspection in progress", "Reading the selected image in read-only mode.");
-    process_->setProcessChannelMode(QProcess::SeparateChannels);
-    process_->start(cliPath(), {"inspect-image", imagePath});
+    const std::filesystem::path nativePath =
+#ifdef _WIN32
+        std::filesystem::path(imagePath.toStdWString());
+#else
+        std::filesystem::path(imagePath.toUtf8().constData());
+#endif
+    inspectionWatcher_->setFuture(QtConcurrent::run([nativePath] {
+        return filerelic::inspect_image(nativePath);
+    }));
 }
 
-void MainWindow::appendOutput() {
-    rawReport_ += QString::fromUtf8(process_->readAllStandardOutput());
-    rawReport_ += QString::fromUtf8(process_->readAllStandardError());
+void MainWindow::inspectionFinished() {
+    const filerelic::InspectionReport report = inspectionWatcher_->result();
+    rawReport_ = QString::fromStdString(report.rendered_text);
     rawLog_->setPlainText(rawReport_);
-}
-
-void MainWindow::inspectionFinished(int exitCode, QProcess::ExitStatus exitStatus) {
-    appendOutput();
     chooseButton_->setEnabled(true);
     analyzeButton_->setEnabled(!selectedImagePath_.isEmpty());
-    if (exitStatus == QProcess::NormalExit && exitCode == 0) {
+    if (report.succeeded()) {
         status_->setText("Inspection complete — no image data was modified.");
-        renderResults(true);
+        renderResults(report);
     } else {
         status_->setText("Inspection failed; see the report for details.");
-        renderResults(false);
+        renderResults(report);
     }
 }
 
@@ -279,68 +259,26 @@ void MainWindow::addResultCard(const QString& title, const QString& content, con
     resultsLayout_->insertWidget(resultsLayout_->count(), card);
 }
 
-void MainWindow::renderResults(bool succeeded) {
+void MainWindow::renderResults(const filerelic::InspectionReport& report) {
     clearResults();
-    const QStringList lines = rawReport_.split('\n', Qt::SkipEmptyParts);
-    QString imageInfo;
-    QString layoutInfo;
-    QStringList warnings;
-    QStringList partitionBlocks;
-    QString currentPartition;
-
-    for (const QString& rawLine : lines) {
-        const QString line = rawLine.trimmed();
-        if (line.startsWith("Image file:") || line.startsWith("Size:")) {
-            imageInfo += line + '\n';
-        }
-        if (line.startsWith("MBR:") || line.startsWith("GPT:")) {
-            layoutInfo += line + '\n';
-        }
-        if (line.contains("warning", Qt::CaseInsensitive)
-            || line.contains("invalid", Qt::CaseInsensitive)
-            || line.startsWith("Error:")) {
-            warnings.append(line);
-        }
-
-        const bool startsPartition = line.startsWith("Partition ")
-            || line.startsWith("Logical partition ")
-            || line.startsWith("GPT partition ");
-        if (startsPartition) {
-            if (!currentPartition.isEmpty()) {
-                partitionBlocks.append(currentPartition);
-            }
-            currentPartition = line + '\n';
-        } else if (!currentPartition.isEmpty()
-                   && (rawLine.startsWith(' ') || rawLine.startsWith('\t'))) {
-            currentPartition += line + '\n';
-        }
-    }
-    if (!currentPartition.isEmpty()) {
-        partitionBlocks.append(currentPartition);
-    }
-
+    const bool succeeded = report.succeeded();
     addResultCard(succeeded ? "Inspection complete" : "Inspection needs attention",
                   succeeded ? "Image was inspected read-only. No image data was modified."
-                            : "FileRelic could not complete this inspection. Review warnings or the raw log.",
+                            : "FileRelic could not complete this inspection. Review the report or raw diagnostic log.",
                   succeeded ? "success" : "warning");
-    if (!imageInfo.isEmpty()) {
-        addResultCard("Image", imageInfo.trimmed());
-    }
-    if (!layoutInfo.isEmpty()) {
-        addResultCard("Partition layout", layoutInfo.trimmed(),
-                      succeeded ? QStringLiteral("success") : QString{});
-    }
-    for (const QString& partition : partitionBlocks) {
-        const int newline = partition.indexOf('\n');
-        const QString title = newline >= 0 ? partition.left(newline) : "Partition";
-        const QString details = newline >= 0 ? partition.mid(newline + 1).trimmed() : QString{};
-        addResultCard(title, details);
-    }
-    if (!warnings.isEmpty()) {
-        addResultCard("Warnings", warnings.join('\n'), "warning");
-    }
-    if (partitionBlocks.isEmpty() && imageInfo.isEmpty() && !rawReport_.isEmpty()) {
-        addResultCard("Diagnostic", rawReport_.trimmed(), "warning");
+
+    for (const auto& section : report.sections) {
+        const QString title = QString::fromStdString(section.title);
+        const QString details = QString::fromStdString(section.details);
+        QString tone;
+        if (section.has_warning
+            || section.kind == filerelic::ReportSectionKind::warnings
+            || section.kind == filerelic::ReportSectionKind::diagnostic) {
+            tone = QStringLiteral("warning");
+        } else if (section.kind == filerelic::ReportSectionKind::partition_layout && succeeded) {
+            tone = QStringLiteral("success");
+        }
+        addResultCard(title, details, tone);
     }
     resultsLayout_->addStretch();
 }

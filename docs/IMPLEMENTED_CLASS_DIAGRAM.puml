@@ -1,33 +1,79 @@
-@startuml FileRelicImplementedClasses
-title FileRelic — Implemented Class Diagram (current prototype)
-hide empty members
+@startuml FileRelicImplementedArchitecture
+title FileRelic — Current Implementation (reference-diagram layout)
+
+left to right direction
 skinparam classAttributeIconSize 0
 skinparam packageStyle rectangle
 skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam class {
+  BackgroundColor White
+  BorderColor #334155
+  ArrowColor #475569
+}
+skinparam package {
+  BackgroundColor #F8FAFC
+  BorderColor #94A3B8
+}
 
-legend right
-  <b>Scope</b>
-  This diagram records code that currently exists.
-  Packages group free functions; package groups are not C++ classes.
-  The GUI currently invokes the CLI as a separate process.
+legend bottom
+  Solid boxes are C++ classes or structs that exist in the code.
+  Boxes marked «free functions» group real functions; they are not classes.
+  This diagram follows the supplied class.jpeg's left-to-right flow while
+  describing the current implementation, including its present CLI-based GUI link.
 endlegend
 
-package "CLI application (src/main.cpp)" {
-  class "main(argc, argv)" as CliMain <<entry point>> {
-    +parse command
-    +dispatch inspect / demo
+package "User interface" {
+  class "CLI entry point" as CliMain <<function>> {
+    +main(argc, argv)
+    +dispatch help / version / inspect / demo
   }
 
-  package "Anonymous-namespace inspection functions" as InspectorFunctions {
-    class "inspect_image_file(path)" as InspectFile <<free function>>
-    class "inspect_mbr(image, size)" as InspectMbr <<free function>>
-    class "inspect_extended_partition(...)" as InspectEbr <<free function>>
-    class "inspect_gpt(image, size)" as InspectGpt <<free function>>
-    class "detect_file_system(...)" as DetectFs <<free function>>
-    class "inspect_ext_superblock(...)" as InspectExt <<free function>>
-    class "inspect_ext_root_directory(...)" as InspectExtDir <<free function>>
-    class "inspect_ext_file_inode(...)" as InspectExtInode <<free function>>
-    class "run_demo(executable_path)" as RunDemo <<free function>>
+  class MainWindow <<Qt class>> {
+    +chooseImage()
+    +analyzeImage()
+    +appendOutput()
+    +inspectionFinished(exitCode, exitStatus)
+    +toggleRawLog(visible)
+    -cliPath(): QString
+    -inspectImage(path)
+    -renderResults(succeeded)
+    -clearResults()
+    -addResultCard(...)
+    -selectedImagePath: QString
+    -rawReport: QString
+  }
+  class QProcess <<Qt class>>
+}
+
+package "Image inspection" {
+  class "Partition table functions" as PartitionFunctions <<free functions>> {
+    inspect_image_file(path)
+    inspect_mbr(image, size)
+    inspect_extended_partition(...)
+    inspect_gpt(image, size)
+    read_gpt_header(...)
+    read_partition_entry(...)
+  }
+
+  class "Filesystem functions" as FilesystemFunctions <<free functions>> {
+    detect_file_system(...)
+    print_file_system_report(...)
+    inspect_ext_superblock(...)
+    inspect_ext_root_directory(...)
+    inspect_ext_file_inode(...)
+  }
+
+  class "Binary and image helpers" as BinaryFunctions <<free functions>> {
+    read_sector(...)
+    read_bytes_at(...)
+    matches_bytes_at(...)
+    read_little_endian_u32(...)
+    read_little_endian_u64(...)
+    crc32_ieee(...)
+    read_ascii_field(...)
+    format_uuid(...)
   }
 
   class MbrEntry <<struct>> {
@@ -55,7 +101,7 @@ package "CLI application (src/main.cpp)" {
   }
 }
 
-package "Shared inspection API (src/image_inspector.h)" {
+package "Report and output" {
   class InspectionReport <<struct>> {
     +image_path: filesystem::path
     +image_size_bytes: uintmax_t
@@ -63,56 +109,45 @@ package "Shared inspection API (src/image_inspector.h)" {
     +rendered_text: string
     +succeeded(): bool
   }
-  class "inspect_image(path)" as InspectApi <<function>>
-  class "render_report(report, output)" as RenderApi <<function>>
-}
 
-package "Qt desktop application (gui/)" {
-  class MainWindow <<Qt class>> {
-    +chooseImage()
-    +analyzeImage()
-    +appendOutput()
-    +inspectionFinished(...)
-    +toggleRawLog(visible)
-    -cliPath(): QString
-    -inspectImage(path)
-    -renderResults(succeeded)
-    -clearResults()
-    -addResultCard(...)
-    -selectedImagePath: QString
-    -rawReport: QString
+  class "Inspection API" as InspectApi <<free function>> {
+    +inspect_image(path): InspectionReport
   }
-  class QProcess <<Qt class>>
-  class "Qt Widgets" as QtWidgets <<framework>>
+
+  class "Report rendering API" as RenderApi <<free function>> {
+    +render_report(report, output)
+  }
 }
 
-CliMain ..> InspectApi : calls for inspect
-CliMain ..> RunDemo : calls for demo
-InspectApi ..> InspectFile : captures parser output
-InspectApi ..> InspectionReport : creates
-RenderApi ..> InspectionReport : reads
-InspectFile ..> InspectMbr : scans partition table
-InspectMbr ..> MbrEntry : decodes entries
-InspectMbr ..> InspectEbr : follows extended partitions
-InspectMbr ..> InspectGpt : follows protective MBR
-InspectMbr ..> DetectFs : checks partition signatures
-InspectEbr ..> DetectFs : checks logical partitions
-InspectGpt ..> DetectFs : checks GPT partitions
-DetectFs ..> InspectExt : on ext-family signature
-InspectExt ..> ExtSuperblockInfo : constructs
-InspectExt ..> InspectExtDir : reads root metadata
-InspectExtDir ..> InspectExtInode : reads named inode
-MainWindow ..> QProcess : starts filerelic inspect-image
-MainWindow ..> QtWidgets : builds result cards
-QProcess ..> CliMain : launches CLI executable
+package "External framework" {
+  class "Qt Widgets" as QtWidgets <<framework>>
+  class "filerelic executable" as CliExecutable <<process>>
+}
+
+CliMain --> InspectApi : inspect command
+CliMain --> PartitionFunctions : demo fixtures
+InspectApi --> PartitionFunctions : performs inspection
+PartitionFunctions --> FilesystemFunctions : detects filesystem
+PartitionFunctions --> BinaryFunctions : reads and validates bytes
+FilesystemFunctions --> BinaryFunctions : decodes metadata
+PartitionFunctions --> MbrEntry : reads entries
+PartitionFunctions --> GptHeader : validates headers
+FilesystemFunctions --> ExtSuperblockInfo : fills metadata
+InspectApi --> InspectionReport : returns
+RenderApi --> InspectionReport : formats
+MainWindow --> QProcess : starts process
+QProcess --> CliExecutable : launches
+MainWindow --> QtWidgets : builds result cards
+CliExecutable ..> CliMain : runs
 
 note bottom of MainWindow
-  GUI currently displays structured-looking cards by interpreting
-  CLI report text. It does not yet call InspectionReport directly.
+  The GUI currently invokes the CLI and presents its output as readable cards.
+  It does not consume InspectionReport directly yet.
 end note
 
 note bottom of InspectionReport
-  Current report carries rendered text, not typed partition objects.
+  This shared report currently stores image status and rendered text.
+  Typed partition and filesystem result collections are future work.
 end note
 
 @enduml

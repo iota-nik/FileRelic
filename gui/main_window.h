@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QProcess>
+#include <QFutureWatcher>
 #include <QString>
+
+#include "image_inspector.h"
 
 class QLabel;
 class QPlainTextEdit;
@@ -20,14 +22,12 @@ public:
 private slots:
     void chooseImage();
     void analyzeImage();
-    void appendOutput();
-    void inspectionFinished(int exitCode, QProcess::ExitStatus exitStatus);
+    void inspectionFinished();
     void toggleRawLog(bool visible);
 
 private:
-    QString cliPath() const;
     void inspectImage(const QString& imagePath);
-    void renderResults(bool succeeded);
+    void renderResults(const filerelic::InspectionReport& report);
     void clearResults();
     void addResultCard(const QString& title, const QString& content, const QString& tone = {});
 
@@ -40,7 +40,7 @@ private:
     QToolButton* rawLogToggle_;
     QWidget* resultsContainer_;
     QVBoxLayout* resultsLayout_;
-    QProcess* process_;
+    QFutureWatcher<filerelic::InspectionReport>* inspectionWatcher_;
     QString selectedImagePath_;
     QString rawReport_;
 };

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -13,19 +14,6 @@
 #include "image_inspector.h"
 
 namespace {
-
-void print_help() {
-    std::cout << "FileRelic " << FILERELIC_VERSION << "\n"
-              << "Forensic recovery toolkit (development scaffold)\n\n"
-              << "Usage:\n"
-              << "  filerelic --version   Print the application version\n"
-              << "  filerelic --help      Show this help\n"
-              << "  filerelic inspect <path>\n"
-              << "                       Inspect a regular image file read-only\n"
-              << "  filerelic inspect-image <path>\n"
-              << "                       Compatibility name for inspect\n"
-              << "  filerelic demo        Run the bundled safe inspection demonstration\n";
-}
 
 std::uint32_t read_little_endian_u32(const unsigned char* bytes) {
     return static_cast<std::uint32_t>(bytes[0])
@@ -82,6 +70,13 @@ bool is_extended_partition(unsigned char type) {
     return type == 0x05 || type == 0x0f || type == 0x85;
 }
 
+std::string format_mbr_type_code(unsigned char type) {
+    std::ostringstream formatted;
+    formatted << "0x" << std::hex << std::setw(2) << std::setfill('0')
+              << static_cast<unsigned int>(type);
+    return formatted.str();
+}
+
 bool is_valid_range(std::uintmax_t file_size,
                     std::uintmax_t start_byte,
                     std::uintmax_t length_bytes) {
@@ -119,26 +114,31 @@ bool matches_bytes_at(std::ifstream& image,
         && std::equal(actual.begin(), actual.end(), expected.begin());
 }
 
-std::string detect_file_system(std::ifstream& image,
-                               std::uintmax_t file_size,
-                               std::uintmax_t partition_start) {
+filerelic::FileSystemInfo detect_file_system(std::ifstream& image,
+                                             std::uintmax_t file_size,
+                                             std::uintmax_t partition_start) {
     if (matches_bytes_at(image, file_size, partition_start + 3, "NTFS    ")) {
-        return "probable NTFS (boot-sector signature)";
+        return {filerelic::FileSystemKind::ntfs,
+                "probable NTFS (boot-sector signature)", true};
     }
     if (matches_bytes_at(image, file_size, partition_start + 32, "NXSB")) {
-        return "probable APFS container (NXSB signature)";
+        return {filerelic::FileSystemKind::apfs,
+                "probable APFS container (NXSB signature)", true};
     }
     if (matches_bytes_at(image, file_size, partition_start, "XFSB")) {
-        return "probable XFS (superblock signature)";
+        return {filerelic::FileSystemKind::xfs,
+                "probable XFS (superblock signature)", true};
     }
     if (matches_bytes_at(image, file_size, partition_start + 1024 + 56,
                          std::string_view("\x53\xef", 2))) {
-        return "probable ext-family filesystem (ext2/ext3/ext4 magic)";
+        return {filerelic::FileSystemKind::ext_family,
+                "probable ext-family filesystem (ext2/ext3/ext4 magic)", true};
     }
     if (matches_bytes_at(image, file_size, partition_start + 0x10040, "_BHRfS_M")) {
-        return "probable Btrfs (superblock signature)";
+        return {filerelic::FileSystemKind::btrfs,
+                "probable Btrfs (superblock signature)", true};
     }
-    return "no supported signature found";
+    return {};
 }
 
 bool read_bytes_at(std::ifstream& image,
@@ -185,7 +185,8 @@ struct ExtSuperblockInfo {
     std::uint32_t inodes_per_group;
 };
 
-void inspect_ext_file_inode(std::ifstream& image,
+void inspect_ext_file_inode(std::ostream& output,
+                            std::ifstream& image,
                             std::uintmax_t file_size,
                             std::uintmax_t partition_start,
                             std::uint32_t inode_table_block,
@@ -195,7 +196,7 @@ void inspect_ext_file_inode(std::ifstream& image,
     // This first adapter handles only the first inode group. Full ext4 support
     // will select the appropriate group descriptor for larger inode numbers.
     if (inode_number == 0 || inode_number > superblock_info.inodes_per_group) {
-        std::cout << "        inode metadata: outside the first inode group\n";
+        output << "        inode metadata: outside the first inode group\n";
         return;
     }
     const std::uintmax_t inode_offset = partition_start
@@ -203,7 +204,7 @@ void inspect_ext_file_inode(std::ifstream& image,
         + static_cast<std::uintmax_t>(inode_number - 1) * superblock_info.inode_size;
     std::vector<unsigned char> inode(superblock_info.inode_size);
     if (!read_bytes_at(image, file_size, inode_offset, inode.data(), inode.size())) {
-        std::cout << "        inode metadata: could not read inode " << inode_number << '\n';
+        output << "        inode metadata: could not read inode " << inode_number << '\n';
         return;
     }
 
@@ -212,34 +213,35 @@ void inspect_ext_file_inode(std::ifstream& image,
     const std::uint32_t size = read_little_endian_u32(inode.data() + 4);
     const std::uint32_t flags = read_little_endian_u32(inode.data() + 32);
     const std::uint16_t type = mode & 0xf000U;
-    std::cout << "        inode metadata for " << name << ": ";
+    output << "        inode metadata for " << name << ": ";
     if (type == 0x8000U) {
-        std::cout << "regular file\n";
+        output << "regular file\n";
     } else if (type == 0x4000U) {
-        std::cout << "directory\n";
+        output << "directory\n";
     } else if (type == 0xa000U) {
-        std::cout << "symbolic link\n";
+        output << "symbolic link\n";
     } else {
-        std::cout << "unsupported type\n";
+        output << "unsupported type\n";
         return;
     }
-    std::cout << "          Size: " << size << " bytes\n";
+    output << "          Size: " << size << " bytes\n";
     if ((flags & 0x00080000U) != 0) {
-        std::cout << "          Data mapping: extent tree (not decoded yet)\n";
+        output << "          Data mapping: extent tree (not decoded yet)\n";
         return;
     }
     const std::uint32_t first_data_block = read_little_endian_u32(inode.data() + 40);
     if (first_data_block == 0) {
-        std::cout << "          Data mapping: no first direct block\n";
+        output << "          Data mapping: no first direct block\n";
         return;
     }
-    std::cout << "          First data block: " << first_data_block
+    output << "          First data block: " << first_data_block
               << " (byte " << partition_start
               + static_cast<std::uintmax_t>(first_data_block) * superblock_info.block_size
               << ")\n";
 }
 
-void inspect_ext_root_directory(std::ifstream& image,
+void inspect_ext_root_directory(std::ostream& output,
+                                std::ifstream& image,
                                 std::uintmax_t file_size,
                                 std::uintmax_t partition_start,
                                 const ExtSuperblockInfo& superblock_info) {
@@ -249,14 +251,14 @@ void inspect_ext_root_directory(std::ifstream& image,
     std::array<unsigned char, 32> group_descriptor{};
     if (!read_bytes_at(image, file_size, group_descriptor_offset,
                        group_descriptor.data(), group_descriptor.size())) {
-        std::cout << "    ext root directory: could not read group descriptor\n";
+        output << "    ext root directory: could not read group descriptor\n";
         return;
     }
 
     const std::uint32_t inode_table_block = read_little_endian_u32(group_descriptor.data() + 8);
     if (inode_table_block == 0 || superblock_info.inode_size < 128
         || superblock_info.inode_size > superblock_info.block_size) {
-        std::cout << "    ext root directory: unsupported inode-table layout\n";
+        output << "    ext root directory: unsupported inode-table layout\n";
         return;
     }
 
@@ -266,7 +268,7 @@ void inspect_ext_root_directory(std::ifstream& image,
     std::vector<unsigned char> root_inode(superblock_info.inode_size);
     if (!read_bytes_at(image, file_size, root_inode_offset,
                        root_inode.data(), root_inode.size())) {
-        std::cout << "    ext root directory: could not read root inode\n";
+        output << "    ext root directory: could not read root inode\n";
         return;
     }
 
@@ -274,17 +276,17 @@ void inspect_ext_root_directory(std::ifstream& image,
         root_inode[0] | (static_cast<std::uint16_t>(root_inode[1]) << 8U));
     const std::uint32_t inode_flags = read_little_endian_u32(root_inode.data() + 32);
     if ((mode & 0xf000U) != 0x4000U) {
-        std::cout << "    ext root directory: root inode is not a directory\n";
+        output << "    ext root directory: root inode is not a directory\n";
         return;
     }
     if ((inode_flags & 0x00080000U) != 0) {
-        std::cout << "    ext root directory: extent trees are not supported yet\n";
+        output << "    ext root directory: extent trees are not supported yet\n";
         return;
     }
 
     const std::uint32_t first_data_block = read_little_endian_u32(root_inode.data() + 40);
     if (first_data_block == 0) {
-        std::cout << "    ext root directory: no direct data block is present\n";
+        output << "    ext root directory: no direct data block is present\n";
         return;
     }
     const std::uintmax_t directory_offset = partition_start
@@ -292,11 +294,11 @@ void inspect_ext_root_directory(std::ifstream& image,
     std::vector<unsigned char> directory_block(superblock_info.block_size);
     if (!read_bytes_at(image, file_size, directory_offset,
                        directory_block.data(), directory_block.size())) {
-        std::cout << "    ext root directory: could not read directory block\n";
+        output << "    ext root directory: could not read directory block\n";
         return;
     }
 
-    std::cout << "    ext root directory (first direct block):\n";
+    output << "    ext root directory (first direct block):\n";
     std::size_t offset = 0;
     std::size_t entry_count = 0;
     while (offset + 8 <= directory_block.size() && entry_count < 64) {
@@ -308,15 +310,15 @@ void inspect_ext_root_directory(std::ifstream& image,
         if (record_length < 8 || record_length % 4 != 0
             || record_length > directory_block.size() - offset
             || name_length > record_length - 8) {
-            std::cout << "      Warning: invalid directory-entry record; stopped safely\n";
+            output << "      Warning: invalid directory-entry record; stopped safely\n";
             return;
         }
         if (inode_number != 0) {
-            std::cout << "      " << read_ascii_field(entry + 8, name_length)
+            output << "      " << read_ascii_field(entry + 8, name_length)
                       << " (inode " << inode_number << ")\n";
             const std::string name = read_ascii_field(entry + 8, name_length);
             if (name != "." && name != "..") {
-                inspect_ext_file_inode(image, file_size, partition_start, inode_table_block,
+                inspect_ext_file_inode(output, image, file_size, partition_start, inode_table_block,
                                        superblock_info, inode_number, name);
             }
             ++entry_count;
@@ -325,20 +327,22 @@ void inspect_ext_root_directory(std::ifstream& image,
     }
 }
 
-void inspect_ext_superblock(std::ifstream& image,
+void inspect_ext_superblock(std::ostream& output,
+                            std::ifstream& image,
                             std::uintmax_t file_size,
-                            std::uintmax_t partition_start) {
+                            std::uintmax_t partition_start,
+                            filerelic::FileSystemInfo& file_system) {
     constexpr std::size_t superblock_offset = 1024;
     std::array<unsigned char, 1024> superblock{};
     if (!read_bytes_at(image, file_size, partition_start + superblock_offset,
                        superblock.data(), superblock.size())) {
-        std::cout << "    ext metadata: could not read complete superblock\n";
+        output << "    ext metadata: could not read complete superblock\n";
         return;
     }
 
     const std::uint32_t log_block_size = read_little_endian_u32(superblock.data() + 24);
     if (log_block_size > 6) {
-        std::cout << "    ext metadata: invalid block-size exponent\n";
+        output << "    ext metadata: invalid block-size exponent\n";
         return;
     }
 
@@ -349,36 +353,52 @@ void inspect_ext_superblock(std::ifstream& image,
     const std::uint32_t incompatible_features =
         read_little_endian_u32(superblock.data() + 96);
     const std::uint32_t inodes_per_group = read_little_endian_u32(superblock.data() + 40);
+    file_system.volume_label = read_ascii_field(superblock.data() + 120, 16);
+    file_system.uuid = format_uuid(superblock.data() + 104);
+    file_system.block_size_bytes = 1024U << log_block_size;
+    file_system.inode_size_bytes = inode_size;
+    file_system.state = filesystem_state == 1 ? "cleanly unmounted"
+        : filesystem_state == 2 ? "errors recorded" : "unknown";
+    file_system.features = std::string(
+        (incompatible_features & 0x40U) != 0 ? "extents " : "")
+        + ((incompatible_features & 0x80U) != 0 ? "64-bit " : "");
 
-    std::cout << "    ext metadata:\n"
+    output << "    ext metadata:\n"
               << "      Volume label: " << read_ascii_field(superblock.data() + 120, 16) << '\n'
               << "      UUID: " << format_uuid(superblock.data() + 104) << '\n'
               << "      Block size: " << (1024U << log_block_size) << " bytes\n"
               << "      Inode size: " << inode_size << " bytes\n"
               << "      State: ";
     if (filesystem_state == 1) {
-        std::cout << "cleanly unmounted\n";
+        output << "cleanly unmounted\n";
     } else if (filesystem_state == 2) {
-        std::cout << "errors recorded\n";
+        output << "errors recorded\n";
     } else {
-        std::cout << "unknown (0x" << std::hex << filesystem_state << std::dec << ")\n";
+        output << "unknown (0x" << std::hex << filesystem_state << std::dec << ")\n";
     }
-    std::cout << "      Features: "
+    output << "      Features: "
               << ((incompatible_features & 0x40U) != 0 ? "extents " : "")
               << ((incompatible_features & 0x80U) != 0 ? "64-bit " : "")
               << "(incompatible mask 0x" << std::hex << incompatible_features << std::dec << ")\n";
-    inspect_ext_root_directory(image, file_size, partition_start,
+    inspect_ext_root_directory(output, image, file_size, partition_start,
                                {1024U << log_block_size, inode_size, inodes_per_group});
 }
 
-void print_file_system_report(std::ifstream& image,
-                              std::uintmax_t file_size,
-                              std::uintmax_t partition_start) {
-    const std::string detected = detect_file_system(image, file_size, partition_start);
-    std::cout << detected << '\n';
-    if (detected.find("ext-family") != std::string::npos) {
-        inspect_ext_superblock(image, file_size, partition_start);
+filerelic::FileSystemInfo inspect_file_system(std::ostream& output,
+                                              std::ifstream& image,
+                                              std::uintmax_t file_size,
+                                              std::uintmax_t partition_start) {
+    filerelic::FileSystemInfo file_system = detect_file_system(image, file_size, partition_start);
+    if (file_system.signature_found) {
+        output << file_system.label << '\n';
+    } else {
+        output << "no supported signature found\n";
+        file_system.label = "no supported signature found";
     }
+    if (file_system.kind == filerelic::FileSystemKind::ext_family) {
+        inspect_ext_superblock(output, image, file_size, partition_start, file_system);
+    }
+    return file_system;
 }
 
 struct GptHeader {
@@ -451,38 +471,64 @@ std::string read_gpt_name(const unsigned char* entry, std::size_t entry_size) {
     return name.empty() ? "unnamed" : name;
 }
 
-void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
+std::string format_gpt_type_guid(const unsigned char* guid) {
+    constexpr std::array<std::size_t, 16> order{3, 2, 1, 0, 5, 4, 7, 6,
+                                                 8, 9, 10, 11, 12, 13, 14, 15};
+    std::ostringstream formatted;
+    for (std::size_t index = 0; index < order.size(); ++index) {
+        if (index == 4 || index == 6 || index == 8 || index == 10) {
+            formatted << '-';
+        }
+        formatted << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned int>(guid[order[index]]);
+    }
+    return formatted.str();
+}
+
+void inspect_gpt(std::ostream& output,
+                 std::ifstream& image,
+                 std::uintmax_t file_size,
+                 filerelic::InspectionReport& report) {
     constexpr std::size_t maximum_partition_entries = 128;
     const std::uintmax_t total_sectors = file_size / sector_size;
+    report.partition_table = filerelic::PartitionTableKind::gpt;
     GptHeader primary{};
     std::string error;
     if (!read_gpt_header(image, file_size, 1, primary, error)) {
-        std::cout << "  GPT: primary header invalid; " << error << '\n';
+        output << "  GPT: primary header invalid; " << error << '\n';
+        report.partition_table_state = filerelic::ValidationState::invalid;
+        report.warnings.push_back("GPT primary header invalid: " + error);
         return;
     }
 
-    std::cout << "  GPT: primary header valid (CRC32 checked)\n";
+    report.partition_table_state = filerelic::ValidationState::valid;
+    output << "  GPT: primary header valid (CRC32 checked)\n";
     bool has_warning = false;
     if (primary.current_lba != 1 || primary.backup_lba >= total_sectors
         || primary.first_usable_lba > primary.last_usable_lba) {
-        std::cout << "  GPT warning: inconsistent primary-header locations or usable range\n";
+        output << "  GPT warning: inconsistent primary-header locations or usable range\n";
+        report.warnings.push_back("GPT primary header has inconsistent locations or usable range");
         has_warning = true;
     }
 
     GptHeader backup{};
     if (!read_gpt_header(image, file_size, primary.backup_lba, backup, error)) {
-        std::cout << "  GPT warning: backup header invalid; " << error << '\n';
+        output << "  GPT warning: backup header invalid; " << error << '\n';
+        report.warnings.push_back("GPT backup header invalid: " + error);
         has_warning = true;
     } else if (backup.current_lba != primary.backup_lba || backup.backup_lba != 1) {
-        std::cout << "  GPT warning: backup header does not point back to primary header\n";
+        output << "  GPT warning: backup header does not point back to primary header\n";
+        report.warnings.push_back("GPT backup header does not point back to primary header");
         has_warning = true;
     } else {
-        std::cout << "  GPT: backup header valid (CRC32 checked)\n";
+        output << "  GPT: backup header valid (CRC32 checked)\n";
     }
 
     if (primary.partition_entry_count == 0 || primary.partition_entry_count > maximum_partition_entries
         || primary.partition_entry_size < 128 || primary.partition_entry_size > 4096) {
-        std::cout << "  GPT warning: unsupported partition-entry count or size\n";
+        output << "  GPT warning: unsupported partition-entry count or size\n";
+        report.warnings.push_back("GPT partition-entry count or size is unsupported");
+        report.partition_table_state = filerelic::ValidationState::warning;
         return;
     }
 
@@ -490,7 +536,9 @@ void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
         static_cast<std::uintmax_t>(primary.partition_entry_count) * primary.partition_entry_size;
     const std::uintmax_t entries_start = primary.partition_entries_lba * sector_size;
     if (!is_valid_range(file_size, entries_start, entries_length)) {
-        std::cout << "  GPT warning: partition-entry array extends beyond image boundary\n";
+        output << "  GPT warning: partition-entry array extends beyond image boundary\n";
+        report.warnings.push_back("GPT partition-entry array extends beyond image boundary");
+        report.partition_table_state = filerelic::ValidationState::invalid;
         return;
     }
 
@@ -500,14 +548,18 @@ void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
     image.read(reinterpret_cast<char*>(entries.data()),
                static_cast<std::streamsize>(entries.size()));
     if (image.gcount() != static_cast<std::streamsize>(entries.size())) {
-        std::cout << "  GPT warning: could not read complete partition-entry array\n";
+        output << "  GPT warning: could not read complete partition-entry array\n";
+        report.warnings.push_back("Could not read complete GPT partition-entry array");
+        report.partition_table_state = filerelic::ValidationState::invalid;
         return;
     }
     if (crc32_ieee(entries.data(), entries.size()) != primary.partition_entries_crc32) {
-        std::cout << "  GPT warning: partition-entry array CRC32 does not match\n";
+        output << "  GPT warning: partition-entry array CRC32 does not match\n";
+        report.warnings.push_back("GPT partition-entry array CRC32 does not match");
+        report.partition_table_state = filerelic::ValidationState::invalid;
         return;
     }
-    std::cout << "  GPT: partition-entry array valid (CRC32 checked)\n";
+    output << "  GPT: partition-entry array valid (CRC32 checked)\n";
 
     struct Range {
         std::uint64_t start_lba;
@@ -529,21 +581,41 @@ void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
             && start_lba >= primary.first_usable_lba
             && end_lba <= primary.last_usable_lba
             && end_lba < total_sectors;
+        filerelic::PartitionInfo partition;
+        partition.table = filerelic::PartitionTableKind::gpt;
+        partition.number = index + 1;
+        partition.name = read_gpt_name(entry, primary.partition_entry_size);
+        partition.type_id = format_gpt_type_guid(entry);
+        partition.start_sector = start_lba;
+        const std::uint64_t lba_difference = end_lba >= start_lba ? end_lba - start_lba : 0;
+        partition.sector_count = end_lba >= start_lba
+                && lba_difference < std::numeric_limits<std::uint64_t>::max()
+            ? lba_difference + 1 : 0;
+        partition.range_valid = range_is_valid;
+        if (range_is_valid) {
+            partition.start_byte = start_lba * sector_size;
+            partition.length_bytes = partition.sector_count * sector_size;
+        }
 
-        std::cout << "  GPT partition " << index + 1 << " (" 
-                  << read_gpt_name(entry, primary.partition_entry_size) << "):\n"
+        output << "  GPT partition " << index + 1 << " (" 
+                  << partition.name << "):\n"
                   << "    Starts: sector " << start_lba << '\n'
                   << "    Ends: sector " << end_lba << '\n';
         if (!range_is_valid) {
-            std::cout << "    Status: invalid partition range\n";
+            output << "    Status: invalid partition range\n";
+            partition.warnings.push_back("Partition range is invalid");
+            report.warnings.push_back("GPT partition " + std::to_string(index + 1)
+                                      + " has an invalid range");
+            report.partitions.push_back(std::move(partition));
             has_warning = true;
             continue;
         }
 
         const std::uintmax_t start_byte = start_lba * sector_size;
-        std::cout << "    Length: " << end_lba - start_lba + 1 << " sectors\n"
+        output << "    Length: " << end_lba - start_lba + 1 << " sectors\n"
                   << "    File system: ";
-        print_file_system_report(image, file_size, start_byte);
+        partition.file_system = inspect_file_system(output, image, file_size, start_byte);
+        report.partitions.push_back(std::move(partition));
         partition_ranges.push_back({start_lba, end_lba});
     }
 
@@ -552,27 +624,37 @@ void inspect_gpt(std::ifstream& image, std::uintmax_t file_size) {
             const auto& first = partition_ranges[left];
             const auto& second = partition_ranges[right];
             if (first.start_lba <= second.end_lba && second.start_lba <= first.end_lba) {
-                std::cout << "  GPT warning: valid partition ranges overlap\n";
+                output << "  GPT warning: valid partition ranges overlap\n";
+                report.warnings.push_back("Valid GPT partition ranges overlap");
                 has_warning = true;
             }
         }
     }
 
-    std::cout << "  GPT: " << (has_warning ? "layout has warnings" : "likely valid layout")
+    output << "  GPT: " << (has_warning ? "layout has warnings" : "likely valid layout")
               << '\n';
+    if (has_warning && report.partition_table_state == filerelic::ValidationState::valid) {
+        report.partition_table_state = filerelic::ValidationState::warning;
+    }
 }
 
-void inspect_extended_partition(std::ifstream& image,
+void inspect_extended_partition(std::ostream& output,
+                                std::ifstream& image,
                                 std::uintmax_t file_size,
                                 std::uint32_t extended_start_sector,
-                                std::uint32_t extended_sector_count) {
+                                std::uint32_t extended_sector_count,
+                                filerelic::InspectionReport& report) {
     const std::uintmax_t extended_start_byte =
         static_cast<std::uintmax_t>(extended_start_sector) * sector_size;
     const std::uintmax_t extended_length_bytes =
         static_cast<std::uintmax_t>(extended_sector_count) * sector_size;
     const std::uintmax_t extended_end_byte = extended_start_byte + extended_length_bytes;
+    const auto record_warning = [&report](std::string message) {
+        report.warnings.push_back(std::move(message));
+        report.partition_table_state = filerelic::ValidationState::warning;
+    };
 
-    std::cout << "  Status: extended partition; reading EBR chain\n";
+    output << "  Status: extended partition; reading EBR chain\n";
     std::vector<std::uint64_t> visited_ebr_sectors;
     std::uint64_t current_ebr_sector = extended_start_sector;
     constexpr std::size_t maximum_ebr_records = 128;
@@ -580,8 +662,10 @@ void inspect_extended_partition(std::ifstream& image,
     for (std::size_t record = 0; record < maximum_ebr_records; ++record) {
         if (std::find(visited_ebr_sectors.begin(), visited_ebr_sectors.end(),
                       current_ebr_sector) != visited_ebr_sectors.end()) {
-            std::cout << "  Warning: EBR chain contains a loop at sector "
+            output << "  Warning: EBR chain contains a loop at sector "
                       << current_ebr_sector << '\n';
+            record_warning("EBR chain contains a loop at sector "
+                           + std::to_string(current_ebr_sector));
             return;
         }
         visited_ebr_sectors.push_back(current_ebr_sector);
@@ -590,20 +674,26 @@ void inspect_extended_partition(std::ifstream& image,
         if (!is_valid_range(file_size, ebr_start_byte, sector_size)
             || ebr_start_byte < extended_start_byte
             || ebr_start_byte + sector_size > extended_end_byte) {
-            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+            output << "  Warning: EBR at sector " << current_ebr_sector
                       << " lies outside the extended partition\n";
+            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
+                           + " lies outside the extended partition");
             return;
         }
 
         std::array<unsigned char, sector_size> ebr{};
         if (!read_sector(image, file_size, current_ebr_sector, ebr)) {
-            std::cout << "  Warning: could not read EBR at sector "
+            output << "  Warning: could not read EBR at sector "
                       << current_ebr_sector << '\n';
+            record_warning("Could not read EBR at sector "
+                           + std::to_string(current_ebr_sector));
             return;
         }
         if (ebr[510] != 0x55 || ebr[511] != 0xaa) {
-            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+            output << "  Warning: EBR at sector " << current_ebr_sector
                       << " has no 55 aa signature\n";
+            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
+                           + " has no 55 aa signature");
             return;
         }
 
@@ -611,8 +701,10 @@ void inspect_extended_partition(std::ifstream& image,
         const MbrEntry next_ebr_entry = read_partition_entry(ebr, 1);
 
         if (logical_entry.type == 0 || logical_entry.sector_count == 0) {
-            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+            output << "  Warning: EBR at sector " << current_ebr_sector
                       << " has no valid logical-partition entry\n";
+            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
+                           + " has no valid logical-partition entry");
             return;
         }
 
@@ -626,7 +718,7 @@ void inspect_extended_partition(std::ifstream& image,
             && logical_start_byte >= extended_start_byte
             && logical_start_byte + logical_length_bytes <= extended_end_byte;
 
-        std::cout << "  Logical partition " << record + 1 << ":\n"
+        output << "  Logical partition " << record + 1 << ":\n"
                   << "    Type: 0x" << std::hex << std::setw(2) << std::setfill('0')
                   << static_cast<unsigned int>(logical_entry.type) << std::dec << '\n'
                   << "    Starts: sector " << logical_start_sector
@@ -635,20 +727,48 @@ void inspect_extended_partition(std::ifstream& image,
                   << " sectors (" << logical_length_bytes << " bytes)\n";
 
         if (!logical_range_is_valid) {
-            std::cout << "    Status: invalid; extends beyond extended-partition boundary\n";
+            output << "    Status: invalid; extends beyond extended-partition boundary\n";
+            filerelic::PartitionInfo partition;
+            partition.table = filerelic::PartitionTableKind::mbr;
+            partition.number = record + 1;
+            partition.type_code = logical_entry.type;
+            partition.type_id = format_mbr_type_code(logical_entry.type);
+            partition.start_sector = logical_start_sector;
+            partition.sector_count = logical_entry.sector_count;
+            partition.start_byte = logical_start_byte;
+            partition.length_bytes = logical_length_bytes;
+            partition.range_valid = false;
+            partition.warnings.push_back("Logical partition exceeds the extended-partition boundary");
+            report.partitions.push_back(std::move(partition));
+            report.warnings.push_back("Logical MBR partition " + std::to_string(record + 1)
+                                      + " exceeds the extended-partition boundary");
+            report.partition_table_state = filerelic::ValidationState::warning;
             return;
         }
-        std::cout << "    File system: ";
-        print_file_system_report(image, file_size, logical_start_byte);
+        output << "    File system: ";
+        filerelic::PartitionInfo partition;
+        partition.table = filerelic::PartitionTableKind::mbr;
+        partition.number = record + 1;
+        partition.type_code = logical_entry.type;
+        partition.type_id = format_mbr_type_code(logical_entry.type);
+        partition.start_sector = logical_start_sector;
+        partition.sector_count = logical_entry.sector_count;
+        partition.start_byte = logical_start_byte;
+        partition.length_bytes = logical_length_bytes;
+        partition.range_valid = true;
+        partition.file_system = inspect_file_system(output, image, file_size, logical_start_byte);
+        report.partitions.push_back(std::move(partition));
 
         if (next_ebr_entry.type == 0 && next_ebr_entry.sector_count == 0) {
-            std::cout << "  EBR chain complete\n";
+            output << "  EBR chain complete\n";
             return;
         }
         if (!is_extended_partition(next_ebr_entry.type)
             || next_ebr_entry.sector_count == 0) {
-            std::cout << "  Warning: EBR at sector " << current_ebr_sector
+            output << "  Warning: EBR at sector " << current_ebr_sector
                       << " has an invalid next-EBR entry\n";
+            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
+                           + " has an invalid next-EBR entry");
             return;
         }
 
@@ -656,13 +776,19 @@ void inspect_extended_partition(std::ifstream& image,
             + next_ebr_entry.start_sector;
     }
 
-    std::cout << "  Warning: EBR chain exceeded " << maximum_ebr_records
+    output << "  Warning: EBR chain exceeded " << maximum_ebr_records
               << " records; stopped safely\n";
+    record_warning("EBR chain exceeded the safe limit of "
+                   + std::to_string(maximum_ebr_records) + " records");
 }
 
-void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
+void inspect_mbr(std::ostream& output,
+                 std::ifstream& image,
+                 std::uintmax_t file_size,
+                 filerelic::InspectionReport& report) {
     if (file_size < sector_size) {
-        std::cout << "MBR: image is smaller than one sector; not present\n";
+        output << "MBR: image is smaller than one sector; not present\n";
+        report.diagnostics.push_back("Image is smaller than one sector; no MBR can be present");
         return;
     }
 
@@ -671,16 +797,20 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
     image.seekg(0);
     image.read(reinterpret_cast<char*>(first_sector.data()), first_sector.size());
     if (image.gcount() != static_cast<std::streamsize>(first_sector.size())) {
-        std::cout << "MBR: could not read the first sector\n";
+        output << "MBR: could not read the first sector\n";
+        report.diagnostics.push_back("Could not read the image's first sector");
         return;
     }
 
     if (first_sector[510] != 0x55 || first_sector[511] != 0xaa) {
-        std::cout << "MBR: signature not found\n";
+        output << "MBR: signature not found\n";
+        report.diagnostics.push_back("No MBR signature found at byte offsets 510–511");
         return;
     }
 
-    std::cout << "MBR: signature found (55 aa); validating partition entries\n";
+    output << "MBR: signature found (55 aa); validating partition entries\n";
+    report.partition_table = filerelic::PartitionTableKind::mbr;
+    report.partition_table_state = filerelic::ValidationState::valid;
 
     struct Partition {
         std::size_t number;
@@ -705,8 +835,10 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
             continue;
         }
         if (type == 0 || sector_count == 0) {
-            std::cout << "Partition " << index + 1
+            output << "Partition " << index + 1
                       << ": malformed entry (type and length must both be non-zero)\n";
+            report.warnings.push_back("MBR partition entry " + std::to_string(index + 1)
+                                      + " has only one of type or length set");
             has_invalid_entry = true;
             continue;
         }
@@ -733,20 +865,25 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
             const std::uintmax_t first_end = first.start_byte + first.length_bytes;
             const std::uintmax_t second_end = second.start_byte + second.length_bytes;
             if (first.start_byte < second_end && second.start_byte < first_end) {
-                std::cout << "Warning: partitions " << first.number << " and "
+                output << "Warning: partitions " << first.number << " and "
                           << second.number << " overlap\n";
+                report.warnings.push_back("MBR partitions " + std::to_string(first.number)
+                                          + " and " + std::to_string(second.number)
+                                          + " overlap");
                 has_overlap = true;
             }
         }
     }
 
     if (partitions.empty()) {
-        std::cout << "MBR: signature found, but no populated primary entries\n";
+        output << "MBR: signature found, but no populated primary entries\n";
+        report.partition_table_state = filerelic::ValidationState::warning;
+        report.warnings.push_back("MBR signature exists, but no primary partition entries are populated");
         return;
     }
 
     for (const auto& partition : partitions) {
-        std::cout << "Partition " << partition.number << ":\n"
+        output << "Partition " << partition.number << ":\n"
                   << "  Type: 0x" << std::hex << std::setw(2) << std::setfill('0')
                   << static_cast<unsigned int>(partition.type) << std::dec << '\n'
                   << "  Starts: sector " << partition.start_sector
@@ -755,49 +892,92 @@ void inspect_mbr(std::ifstream& image, std::uintmax_t file_size) {
                   << " sectors (" << partition.length_bytes << " bytes)\n";
 
         if (!partition.range_is_valid) {
-            std::cout << "  Status: invalid; extends beyond image boundary\n";
+            output << "  Status: invalid; extends beyond image boundary\n";
+            filerelic::PartitionInfo record;
+            record.table = filerelic::PartitionTableKind::mbr;
+            record.number = partition.number;
+            record.type_code = partition.type;
+            record.type_id = format_mbr_type_code(partition.type);
+            record.start_sector = partition.start_sector;
+            record.sector_count = partition.sector_count;
+            record.start_byte = partition.start_byte;
+            record.length_bytes = partition.length_bytes;
+            record.range_valid = false;
+            record.warnings.push_back("Partition extends beyond image boundary");
+            report.partitions.push_back(std::move(record));
+            report.warnings.push_back("MBR partition " + std::to_string(partition.number)
+                                      + " extends beyond image boundary");
             has_invalid_entry = true;
             continue;
         }
 
         if (is_extended_partition(partition.type)) {
-            inspect_extended_partition(image, file_size, partition.start_sector,
-                                       partition.sector_count);
+            filerelic::PartitionInfo record;
+            record.table = filerelic::PartitionTableKind::mbr;
+            record.number = partition.number;
+            record.type_code = partition.type;
+            record.type_id = format_mbr_type_code(partition.type);
+            record.start_sector = partition.start_sector;
+            record.sector_count = partition.sector_count;
+            record.start_byte = partition.start_byte;
+            record.length_bytes = partition.length_bytes;
+            record.range_valid = true;
+            record.extended = true;
+            report.partitions.push_back(std::move(record));
+            inspect_extended_partition(output, image, file_size, partition.start_sector,
+                                       partition.sector_count, report);
         } else if (partition.type == 0xee) {
-            std::cout << "  Status: GPT protective partition\n";
-            inspect_gpt(image, file_size);
+            output << "  Status: GPT protective partition\n";
+            inspect_gpt(output, image, file_size, report);
         } else {
-            std::cout << "  File system: ";
-            print_file_system_report(image, file_size, partition.start_byte);
+            output << "  File system: ";
+            filerelic::PartitionInfo record;
+            record.table = filerelic::PartitionTableKind::mbr;
+            record.number = partition.number;
+            record.type_code = partition.type;
+            record.type_id = format_mbr_type_code(partition.type);
+            record.start_sector = partition.start_sector;
+            record.sector_count = partition.sector_count;
+            record.start_byte = partition.start_byte;
+            record.length_bytes = partition.length_bytes;
+            record.range_valid = true;
+            record.file_system = inspect_file_system(output, image, file_size, partition.start_byte);
+            report.partitions.push_back(std::move(record));
         }
     }
 
     if (!has_invalid_entry && !has_overlap) {
-        std::cout << "MBR: likely partition table; all populated primary entries fit the image\n";
+        output << "MBR: likely partition table; all populated primary entries fit the image\n";
     } else {
-        std::cout << "MBR: signature found, but entry validation raised warnings\n";
+        output << "MBR: signature found, but entry validation raised warnings\n";
+        report.partition_table_state = filerelic::ValidationState::warning;
     }
 }
 
-int inspect_image_file(const std::filesystem::path& image_path) {
+int inspect_image_file(const std::filesystem::path& image_path,
+                       std::ostream& output,
+                       filerelic::InspectionReport& report) {
     std::error_code error;
     const bool is_regular_file = std::filesystem::is_regular_file(image_path, error);
     if (error || !is_regular_file) {
-        std::cerr << "Error: path is not a readable regular file: "
+        output << "Error: path is not a readable regular file: "
                   << image_path.string() << '\n';
+        report.diagnostics.push_back("Path is not a readable regular file");
         return 1;
     }
 
     const std::uintmax_t file_size = std::filesystem::file_size(image_path, error);
     if (error) {
-        std::cerr << "Error: could not determine file size: " << error.message() << '\n';
+        output << "Error: could not determine file size: " << error.message() << '\n';
+        report.diagnostics.push_back("Could not determine image file size: " + error.message());
         return 1;
     }
 
     std::ifstream image(image_path, std::ios::binary);
     if (!image) {
-        std::cerr << "Error: could not open file for reading: "
+        output << "Error: could not open file for reading: "
                   << image_path.string() << '\n';
+        report.diagnostics.push_back("Could not open image file for reading");
         return 1;
     }
 
@@ -807,73 +987,23 @@ int inspect_image_file(const std::filesystem::path& image_path) {
         std::min<std::uintmax_t>(file_size, preview.size()));
     image.read(reinterpret_cast<char*>(preview.data()), preview_size);
     if (image.gcount() != preview_size) {
-        std::cerr << "Error: file changed or could not be read completely during inspection.\n";
+        output << "Error: file changed or could not be read completely during inspection.\n";
+        report.diagnostics.push_back("Image changed or could not be read completely during inspection");
         return 1;
     }
 
-    std::cout << "Image file: " << image_path.string() << '\n'
+    output << "Image file: " << image_path.string() << '\n'
               << "Size: " << file_size << " bytes\n"
               << "First " << preview_size << " bytes (hex):";
 
     for (std::streamsize i = 0; i < preview_size; ++i) {
-        std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0')
+        output << ' ' << std::hex << std::setw(2) << std::setfill('0')
                   << static_cast<unsigned int>(preview[static_cast<std::size_t>(i)]);
     }
-    std::cout << std::dec << '\n';
+    output << std::dec << '\n';
 
-    inspect_mbr(image, file_size);
+    inspect_mbr(output, image, file_size, report);
     return 0;
-}
-
-std::filesystem::path find_demo_data_directory(const char* executable_path) {
-    std::error_code error;
-    const std::filesystem::path current_candidate = std::filesystem::current_path(error) / "testdata";
-    if (!error && std::filesystem::is_directory(current_candidate, error)) {
-        return current_candidate;
-    }
-
-    const std::filesystem::path executable = std::filesystem::absolute(executable_path, error);
-    if (!error) {
-        const std::filesystem::path build_candidate = executable.parent_path().parent_path() / "testdata";
-        if (std::filesystem::is_directory(build_candidate, error)) {
-            return build_candidate;
-        }
-    }
-    return {};
-}
-
-int run_demo(const char* executable_path) {
-    const std::filesystem::path test_data = find_demo_data_directory(executable_path);
-    if (test_data.empty()) {
-        std::cerr << "Error: could not locate the bundled testdata directory.\n"
-                  << "Run this command from the FileRelic project directory.\n";
-        return 1;
-    }
-
-    const std::array<std::pair<std::string_view, std::string_view>, 9> examples{{
-        {"Valid MBR layout", "practice-mbr.raw"},
-        {"Extended MBR and logical partitions", "practice-mbr-extended.raw"},
-        {"Invalid partition-boundary warning", "practice-mbr-out-of-bounds.raw"},
-        {"GPT primary/backup validation", "practice-gpt.raw"},
-        {"ext4 metadata and root-directory entries", "practice-fs-ext4.raw"},
-        {"NTFS filesystem signature", "practice-fs-ntfs.raw"},
-        {"APFS filesystem signature", "practice-fs-apfs.raw"},
-        {"XFS filesystem signature", "practice-fs-xfs.raw"},
-        {"Btrfs filesystem signature", "practice-fs-btrfs.raw"},
-    }};
-
-    std::cout << "FileRelic safe demonstration\n"
-              << "All images are synthetic and inspected read-only.\n";
-    int result = 0;
-    for (const auto& [title, filename] : examples) {
-        std::cout << "\n=== " << title << " ===\n";
-        const auto report = filerelic::inspect_image(test_data / filename);
-        filerelic::render_report(report, std::cout);
-        if (!report.succeeded()) {
-            result = 1;
-        }
-    }
-    return result;
 }
 
 } // namespace
@@ -888,53 +1018,105 @@ filerelic::InspectionReport filerelic::inspect_image(const std::filesystem::path
         report.image_size_bytes = 0;
     }
 
-    // The parser currently emits a detailed text trace. Capture it here so the
-    // CLI and future GUI receive one canonical report object. Later milestones
-    // will add typed partition fields alongside this presentation text.
+    // Keep a detailed text trace for CLI compatibility and advanced GUI
+    // diagnostics. Parser routines also populate typed fields on report itself.
     std::ostringstream captured_output;
-    auto* const original_stdout = std::cout.rdbuf(captured_output.rdbuf());
-    auto* const original_stderr = std::cerr.rdbuf(captured_output.rdbuf());
-    report.exit_code = inspect_image_file(image_path);
-    std::cout.rdbuf(original_stdout);
-    std::cerr.rdbuf(original_stderr);
+    report.exit_code = inspect_image_file(image_path, captured_output, report);
     report.rendered_text = captured_output.str();
+
+    // Build presentation sections from the typed results produced by the
+    // inspection routines. This is the shared UI/CLI-facing model; no report
+    // text is reparsed to discover partitions or warnings.
+    report.sections.push_back({
+        filerelic::ReportSectionKind::image,
+        "Image",
+        image_path.string() + "\n" + std::to_string(report.image_size_bytes) + " bytes",
+        false,
+    });
+
+    if (report.partition_table != filerelic::PartitionTableKind::unknown) {
+        const std::string table_name = report.partition_table == filerelic::PartitionTableKind::gpt
+            ? "GPT" : "MBR";
+        const std::string state = report.partition_table_state == filerelic::ValidationState::valid
+            ? "validated" : report.partition_table_state == filerelic::ValidationState::invalid
+                ? "invalid" : report.partition_table_state == filerelic::ValidationState::warning
+                    ? "has warnings" : "unknown";
+        report.sections.push_back({
+            filerelic::ReportSectionKind::partition_layout,
+            "Partition layout",
+            table_name + " partition table " + state,
+            report.partition_table_state == filerelic::ValidationState::warning
+                || report.partition_table_state == filerelic::ValidationState::invalid,
+        });
+    }
+
+    for (const auto& partition : report.partitions) {
+        const std::string scheme = partition.table == filerelic::PartitionTableKind::gpt
+            ? "GPT" : "MBR";
+        std::string title = scheme + " partition " + std::to_string(partition.number);
+        if (!partition.name.empty()) {
+            title += " (" + partition.name + ")";
+        }
+        std::string details;
+        const auto append_detail = [&details](const std::string& value) {
+            if (!details.empty()) details.push_back('\n');
+            details += value;
+        };
+        if (!partition.type_id.empty()) append_detail("Type: " + partition.type_id);
+        append_detail("Starts: sector " + std::to_string(partition.start_sector)
+                      + " (byte " + std::to_string(partition.start_byte) + ")");
+        append_detail("Length: " + std::to_string(partition.sector_count)
+                      + " sectors (" + std::to_string(partition.length_bytes) + " bytes)");
+        append_detail(std::string("Status: ") + (partition.range_valid ? "within image bounds" : "invalid range"));
+        if (partition.extended) {
+            append_detail("Contains an extended MBR logical-partition chain");
+        }
+        if (partition.file_system.signature_found) {
+            append_detail("File system: " + partition.file_system.label);
+        } else if (!partition.extended && partition.range_valid) {
+            append_detail("File system: no supported signature found");
+        }
+        if (!partition.file_system.volume_label.empty()) {
+            append_detail("Volume label: " + partition.file_system.volume_label);
+        }
+        if (!partition.file_system.uuid.empty()) {
+            append_detail("UUID: " + partition.file_system.uuid);
+        }
+        if (partition.file_system.block_size_bytes != 0) {
+            append_detail("Block size: " + std::to_string(partition.file_system.block_size_bytes) + " bytes");
+        }
+        if (partition.file_system.inode_size_bytes != 0) {
+            append_detail("Inode size: " + std::to_string(partition.file_system.inode_size_bytes) + " bytes");
+        }
+        if (!partition.file_system.state.empty()) append_detail("Filesystem state: " + partition.file_system.state);
+        if (!partition.file_system.features.empty()) append_detail("Features: " + partition.file_system.features);
+        for (const auto& warning : partition.warnings) append_detail("Warning: " + warning);
+        report.sections.push_back({filerelic::ReportSectionKind::partition,
+                                   std::move(title), std::move(details),
+                                   !partition.warnings.empty() || !partition.range_valid});
+    }
+
+    if (!report.warnings.empty()) {
+        std::string details;
+        for (const auto& warning : report.warnings) {
+            if (!details.empty()) details.push_back('\n');
+            details += warning;
+        }
+        report.sections.push_back({filerelic::ReportSectionKind::warnings,
+                                   "Warnings", std::move(details), true});
+    }
+    if (!report.diagnostics.empty()) {
+        std::string details;
+        for (const auto& diagnostic : report.diagnostics) {
+            if (!details.empty()) details.push_back('\n');
+            details += diagnostic;
+        }
+        report.sections.push_back({filerelic::ReportSectionKind::diagnostic,
+                                   "Diagnostic", std::move(details), !report.succeeded()});
+    }
     return report;
 }
 
 void filerelic::render_report(const InspectionReport& report, std::ostream& output) {
     output << report.rendered_text;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc == 1 || std::string_view(argv[1]) == "--help") {
-        print_help();
-        return 0;
-    }
-
-    if (std::string_view(argv[1]) == "--version") {
-        std::cout << FILERELIC_VERSION << '\n';
-        return 0;
-    }
-
-    if (std::string_view(argv[1]) == "inspect-image" || std::string_view(argv[1]) == "inspect") {
-        if (argc != 3) {
-            std::cerr << "Usage: filerelic inspect-image <path>\n";
-            return 2;
-        }
-        const auto report = filerelic::inspect_image(argv[2]);
-        filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr);
-        return report.exit_code;
-    }
-
-    if (std::string_view(argv[1]) == "demo") {
-        if (argc != 2) {
-            std::cerr << "Usage: filerelic demo\n";
-            return 2;
-        }
-        return run_demo(argv[0]);
-    }
-
-    std::cerr << "Unknown command: " << argv[1]
-              << "\nRun 'filerelic --help' for available commands.\n";
-    return 2;
 }
