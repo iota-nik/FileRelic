@@ -6,6 +6,20 @@ Build a desktop application and CLI for examining disk images and recovering fil
 
 This plan is intended to be split across multiple developers or coding agents. Keep interfaces stable, assign one owner per workstream, and integrate through the contracts below.
 
+## Current implementation snapshot
+
+The repository has progressed beyond the initial scaffold described in the
+original planning notes. It now includes MBR/EBR/GPT read-only inspection,
+synthetic fixtures, a shared `filerelic_core` library, and a Qt GUI. The CLI
+and GUI both call the core. `InspectionReport` contains typed partition-table,
+partition, filesystem-signature, selected ext-superblock, warning, and
+diagnostic data. The CLI prints a typed summary and retains a detailed legacy
+trace for ext directory/inode observations that have not yet been modeled.
+General file inventory, deleted-file recovery, extraction, case storage, and
+cross-platform release packaging remain future work. For the current order and
+owner-specific next tasks, see [ROADMAP.md](ROADMAP.md) and
+[SESSION_HANDOFF.md](SESSION_HANDOFF.md).
+
 For the staged project outcome, working-project definition, and timing for specialist agents, see [ROADMAP.md](ROADMAP.md). The project begins with a small verifiable CLI core, grows into a shared recovery engine, and then adds the Qt desktop GUI and cross-platform packaging.
 
 ## Project-owner learning path (build from 0 to 100)
@@ -232,7 +246,13 @@ Assign each stream to a separate agent/owner. Each owner should work on its name
 
 The plan defines **8 responsibility areas**: one integrator (Agent 0) and seven specialist workstreams (Agents A–G). These are not eight agents that must be started together. The recommended project staffing is one primary coding/integration agent (Agent 0, with the project owner learning and reviewing) at first. Bring in one specialist agent for a bounded task when needed. After the contracts and CI are working, use at most two or three simultaneous agents on independent directories. Only grow toward all seven specialists if the project, schedule, and review capacity justify that overhead.
 
-The local Git repository now contains a minimal C++17 CLI scaffold (`filerelic --help` / `filerelic --version`) and builds with CMake on the current Linux machine. It does not yet have a remote repository, shared scan API, Qt UI, or parser integration. A beginner-friendly next phase is: learn and review this scaffold; add a small `inspect-image` vertical slice; define only the API needed for a fake image scan; then ask Agent G to validate the build matrix. Do not start parser, GUI, database, and filesystem-specialist coding until that slice works. Other specialists can begin with short research or fixture proposals that do not modify shared code.
+The present implementation has passed the first image-inspection vertical slice:
+CLI and Qt GUI link to one core API and safe fixtures cover MBR, EBR, GPT, and
+filesystem signatures. Continue with typed ext directory/inode findings, then
+freeze an adapter contract before integrating a real filesystem inventory
+library. Do not start database, recovery, and specialist adapter coding against
+unstable shared models; independent parser/license/fixture research can proceed
+in parallel. The staged owner/member assignments are in [ROADMAP.md](ROADMAP.md).
 
 | Agent | Primary responsibility | Owns | Main upstream dependency |
 | --- | --- | --- | --- |

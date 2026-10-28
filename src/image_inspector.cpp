@@ -1118,5 +1118,76 @@ filerelic::InspectionReport filerelic::inspect_image(const std::filesystem::path
 }
 
 void filerelic::render_report(const InspectionReport& report, std::ostream& output) {
-    output << report.rendered_text;
+    const auto table_name = [](PartitionTableKind table) {
+        switch (table) {
+        case PartitionTableKind::mbr: return "MBR";
+        case PartitionTableKind::gpt: return "GPT";
+        case PartitionTableKind::unknown: return "Unknown";
+        }
+        return "Unknown";
+    };
+    const auto state_name = [](ValidationState state) {
+        switch (state) {
+        case ValidationState::valid: return "validated";
+        case ValidationState::warning: return "has warnings";
+        case ValidationState::invalid: return "invalid";
+        case ValidationState::unknown: return "not detected";
+        }
+        return "unknown";
+    };
+
+    output << "FileRelic inspection report\n"
+           << "Image: " << report.image_path.string() << '\n'
+           << "Size: " << report.image_size_bytes << " bytes\n";
+    if (report.partition_table == PartitionTableKind::unknown) {
+        output << "Partition table: not identified\n";
+    } else {
+        output << "Partition table: " << table_name(report.partition_table)
+               << " (" << state_name(report.partition_table_state) << ")\n";
+    }
+
+    if (!report.partitions.empty()) {
+        output << "\nPartitions:\n";
+        for (const auto& partition : report.partitions) {
+            output << "  " << table_name(partition.table) << " partition " << partition.number;
+            if (!partition.name.empty()) output << " (" << partition.name << ')';
+            output << ":\n"
+                   << "    Type: " << (partition.type_id.empty() ? "unknown" : partition.type_id) << '\n'
+                   << "    Start: sector " << partition.start_sector << " (byte "
+                   << partition.start_byte << ")\n"
+                   << "    Length: " << partition.sector_count << " sectors ("
+                   << partition.length_bytes << " bytes)\n"
+                   << "    Range: " << (partition.range_valid ? "within image bounds" : "invalid") << '\n';
+            if (partition.extended) {
+                output << "    Role: extended partition container\n";
+            }
+            if (!partition.extended && partition.range_valid) {
+                output << "    File system: " << partition.file_system.label << '\n';
+            } else if (!partition.range_valid) {
+                output << "    File system: not inspected because the partition range is invalid\n";
+            }
+            const auto& fs = partition.file_system;
+            if (!fs.volume_label.empty()) output << "    Volume label: " << fs.volume_label << '\n';
+            if (!fs.uuid.empty()) output << "    UUID: " << fs.uuid << '\n';
+            if (fs.block_size_bytes != 0) output << "    Block size: " << fs.block_size_bytes << " bytes\n";
+            if (fs.inode_size_bytes != 0) output << "    Inode size: " << fs.inode_size_bytes << " bytes\n";
+            if (!fs.state.empty()) output << "    Filesystem state: " << fs.state << '\n';
+            if (!fs.features.empty()) output << "    Features: " << fs.features << '\n';
+        }
+    }
+
+    if (!report.warnings.empty()) {
+        output << "\nWarnings:\n";
+        for (const auto& warning : report.warnings) output << "  - " << warning << '\n';
+    }
+    if (!report.diagnostics.empty()) {
+        output << "\nDiagnostics:\n";
+        for (const auto& diagnostic : report.diagnostics) output << "  - " << diagnostic << '\n';
+    }
+
+    // Preserve detailed findings that do not yet have dedicated typed fields
+    // (for example, ext directory entries and inode observations).
+    if (!report.rendered_text.empty()) {
+        output << "\nDetailed inspection trace:\n" << report.rendered_text;
+    }
 }

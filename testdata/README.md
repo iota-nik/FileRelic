@@ -2,7 +2,7 @@
 
 The files in this folder are generated locally by `../tools/create_practice_image.py`.
 
-Every image is 1 MiB, has a 512-byte Master Boot Record (MBR), contains no real file system, and has no personal data.
+Every image is a 1 MiB synthetic fixture with no personal data. The partition-table fixtures use a 512-byte MBR sector. The filesystem-signature fixtures are not real mountable filesystems; `practice-fs-ext4.raw` is an intentionally small ext4-shaped teaching fixture with selected metadata and directory records.
 
 | Image | Purpose |
 | --- | --- |

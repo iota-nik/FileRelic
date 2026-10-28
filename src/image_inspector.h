@@ -68,9 +68,8 @@ struct InspectionReport {
     std::vector<std::string> diagnostics;
     std::vector<ReportSection> sections;
 
-    // Kept for CLI compatibility and the GUI's optional raw diagnostic view.
-    // The core will replace this legacy trace with diagnostics as parser
-    // implementations migrate to typed result records.
+    // Detailed trace retained for the CLI appendix and GUI's optional raw log.
+    // Structured fields above are the primary source for interface rendering.
     std::string rendered_text;
 
     [[nodiscard]] bool succeeded() const { return exit_code == 0; }

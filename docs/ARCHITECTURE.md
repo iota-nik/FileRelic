@@ -8,7 +8,7 @@ Command-line interface ─┐
 Desktop GUI ────────────┘
 ```
 
-The command-line interface is for repeatable commands, automation, and testing. A future Qt desktop GUI will offer buttons, progress views, and file previews. The GUI must call the same inspection and recovery functions as the CLI; it must not run a separate implementation or parse terminal output.
+The command-line interface is for repeatable commands and automation. The Qt desktop GUI provides image selection and readable inspection cards. Both call the same inspection core and consume the shared `InspectionReport`; the GUI does not launch the CLI or parse its output.
 
 ## Current implementation
 
@@ -28,10 +28,10 @@ The command-line interface is for repeatable commands, automation, and testing. 
 
 The parser now fills typed partition and filesystem records while reading the
 image. The GUI builds cards from those records through `InspectionReport`;
-the CLI keeps its existing text format through the same report object's raw
-trace. The raw trace is written into a per-inspection stream, not by
-redirecting process-wide `std::cout`/`std::cerr`. Future work can replace that
-compatibility trace with renderers over the typed records.
+the CLI prints a summary from the same fields, then appends the detailed trace
+for findings that do not have typed fields yet. That trace is written into a
+per-inspection stream, not by redirecting process-wide `std::cout`/`std::cerr`.
+Future work can add typed ext directory/inode findings and remove the trace.
 
 The code remains in a small number of source files while we learn the concepts.
 The inspection implementation now builds as a core library target. The public

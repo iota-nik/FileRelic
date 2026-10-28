@@ -119,11 +119,11 @@ builds the CLI/core; the GUI is configured with `cmake -S gui -B build-gui`.
 Qt is an external dependency and is not bundled. Qt 6.2-compatible CMake
 automoc conventions are used.
 
-## Immediate engineering task
+## Current engineering state
 
-Continue from the typed shared-report milestone. The latest structural change
-has been compiled successfully in the current workspace (no test suite was
-added or run). To reproduce the build, use:
+The typed shared-report and CLI-rendering changes build successfully in the
+current workspace (no test suite was added or run). To reproduce the build,
+use:
 
 ```bash
 cmake -S . -B build
@@ -132,46 +132,37 @@ cmake -S gui -B build-gui
 cmake --build build-gui
 ```
 
-Fix compile errors in the current code, then manually run a safe demo or a
-synthetic image only if needed to confirm the CLI and GUI link to the new core.
-Do not write to user disk images. There is no need to commit or push unless
-Nikunj asks.
-
-Explain to Nikunj that a *library* is compiled code that multiple programs can
-call: the CLI and GUI now share the same inspection function. `InspectionReport`
-is the shared result object. It carries actual partition and filesystem
-records; the GUI renders them without decoding CLI text. The old text report
-remains for the CLI and Advanced log during migration. Qt Concurrent runs
+`InspectionReport` is the shared result object returned by the library. It
+carries partition and filesystem records; the GUI renders those records as
+cards, and the CLI renders a text summary from them. The CLI then appends the
+detailed legacy trace for metadata that is not yet modeled. Qt Concurrent runs
 inspection on a worker thread so the interface remains responsive.
 
 ## Recommended next sequence
 
 Keep this order unless repository evidence or a concrete blocker changes it:
 
-### 1. Stabilize shared-core linking
+### 1. Keep shared-core builds working
 
-Build root CLI and GUI. Confirm no code still expects `QProcess` or
-`FILERELIC_CLI_PATH`. Ensure command help/demo and GUI still work. The
-implementation currently duplicates the core target definition in standalone
-GUI CMake; consider a single root CMake option/build that can add the GUI when
-Qt is present, but do that only after the direct-link step is sound.
+The CLI and GUI build against the core. Confirm no code expects `QProcess` or
+`FILERELIC_CLI_PATH` when changing build setup. The implementation currently
+duplicates the core target definition in standalone GUI CMake; consider a
+single root CMake option/build that can add the GUI when Qt is present.
 
-### 2. Render both interfaces from typed data
+### 2. Finish replacing the legacy trace
 
-The GUI uses typed records, but the CLI still prints the compatibility trace
-stored in `InspectionReport::rendered_text`. Add a text renderer over the typed
-fields and preserve legacy details where the report already contains them.
-Then retire parser stream output after the CLI and GUI both render the same
-data model.
+The GUI and CLI now render summaries from typed `InspectionReport` data. The
+CLI appends `rendered_text` because ext directory entries and inode findings
+do not yet have dedicated records. Add those result types and populate them
+directly; then remove the old parser stream output and render both interfaces
+only from the shared model.
 
-### 3. Complete the typed inspection results
+### 3. Complete validation and filesystem results
 
-The current types cover basic table/partition fields and selected ext metadata.
-Add the remaining GPT validation details, EBR warnings, filesystem confidence
-and capability status, ext directory/inode findings, and provenance as parser
-work proceeds. Keep rendering separate: CLI renders text/JSON; GUI builds its
-own cards and tables from the same fields. Keep unknown values explicit rather
-than using fake zeroes.
+The current types cover basic table/partition fields and selected ext
+superblock metadata. Add remaining GPT validation detail, filesystem
+confidence/capability, ext directory/inode findings, and provenance. Keep
+unknown values explicit rather than using fake zeroes.
 
 ### 4. Split core responsibilities into focused files/classes
 
@@ -215,11 +206,11 @@ XFS, Btrfs, snapshots, TRIM, and unsupported filesystem features.
 
 ### 9. Regenerate diagrams after implementation settles
 
-The current PlantUML diagrams are historical snapshots of the earlier
-reference/current distinction. Since Nikunj now wants diagrams redone after
-the project architecture is built, prioritize correct code and this handoff
-document first. Then generate diagrams from the implemented architecture and
-update README links together.
+Stale generated class-diagram PNG/PDF/PlantUML files have been removed. The
+original proposal and diagram images remain in `references/`. Nikunj wants the
+final diagrams created after the implementation architecture settles. Generate
+fresh diagrams from actual code and update README links together; do not
+recreate the archived drafts as if they were current.
 
 ## Safety and quality boundaries
 
@@ -237,25 +228,23 @@ update README links together.
 
 ## Git/workspace notes at handoff
 
-The prior session had user-created commits and a GitHub history merge involving
-an empty initial README. Do not assume the remote or current branch state.
-Inspect with `git status --short`, `git log --oneline -5`, and `git remote -v`
-before discussing commits or pushes. The present working tree contains
-uncommitted diagram-related edits and CFG artifacts from earlier work; preserve
-them unless Nikunj asks to clean them. In particular, do not delete the
-cyclomatic-complexity graph or its source when reorganizing class diagrams.
+The prior session resolved a GitHub history merge involving an empty initial
+README. The shared-core milestone was committed as `20d3d90` and Nikunj
+confirmed it was pushed. Inspect the current branch and worktree before
+discussing another commit or push. Keep the cyclomatic-complexity PDF/source
+and `detect_file_system()` CFG PNG/source; those are requested course
+deliverables, not obsolete class-diagram drafts.
 
 ## Short restart prompt
 
 If context is nearly exhausted, resume with this summary: “Nikunj is learning
 C++/software engineering while building FileRelic; explain each step plainly.
 The goal is a real cross-platform read-only forensic recovery app with one core
-shared by CLI and Qt GUI. The latest change moves the inspector into
-`filerelic_core`; `InspectionReport` now carries typed partition and filesystem
-records, and the GUI renders them via Qt Concurrent. Build both targets after
-the latest changes. Next render CLI output from the same fields, complete
-validation/warning records, separate source/partition/filesystem adapters,
-add real metadata
+shared by CLI and Qt GUI. `InspectionReport` carries typed partition and
+filesystem records, and both interfaces render summaries from it. The CLI
+still appends a legacy trace for ext directory/inode output. Next type those
+findings, remove stream rendering, complete validation/warning records,
+separate source/partition/filesystem adapters, add real metadata
 enumeration, safe extraction, hashes, case reporting, and platform packaging.
 The supplied UML diagrams are guidance only; Nikunj wants final diagrams after
 the architecture settles. Read this handoff and inspect Git state before work.”

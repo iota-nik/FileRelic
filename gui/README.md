@@ -3,9 +3,9 @@
 The Qt desktop application and CLI now link the same `filerelic_core` library.
 The GUI calls `filerelic::inspect_image()` directly on a worker thread; it does
 not start the CLI. It builds cards from typed partition, filesystem, warning,
-and summary records in `InspectionReport`; the CLI renders its compatible text
-report from that same inspection call. The optional Advanced view shows the
-raw diagnostic trace.
+and summary records in `InspectionReport`; the CLI prints a summary from those
+same records and appends the detailed inspection trace. The optional Advanced
+view shows that raw trace by itself.
 
 ## What it does
 
