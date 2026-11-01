@@ -17,9 +17,10 @@ void print_help() {
               << "Usage:\n"
               << "  filerelic --version   Print the application version\n"
               << "  filerelic --help      Show this help\n"
-              << "  filerelic inspect <path>\n"
-              << "                       Inspect a regular image file read-only\n"
-              << "  filerelic inspect-image <path>\n"
+              << "  filerelic inspect [--verbose] <path>\n"
+              << "                       Inspect a regular image file read-only.\n"
+              << "                       --verbose (or -v) appends the step-by-step trace.\n"
+              << "  filerelic inspect-image [--verbose] <path>\n"
               << "                       Compatibility name for inspect\n"
               << "  filerelic demo        Run the bundled safe inspection demonstration\n";
 }
@@ -75,6 +76,33 @@ int run_demo(const char* executable_path) {
     return result;
 }
 
+int run_inspect(int argc, char* argv[]) {
+    bool verbose = false;
+    const char* path = nullptr;
+    for (int index = 2; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--verbose" || argument == "-v") {
+            verbose = true;
+        } else if (path == nullptr) {
+            path = argv[index];
+        } else {
+            path = nullptr;
+            break;
+        }
+    }
+    if (path == nullptr) {
+        std::cerr << "Usage: filerelic inspect [--verbose] <path>\n";
+        return 2;
+    }
+
+    const auto report = filerelic::inspect_image(path);
+    // Always print the report on the stream that matches success/failure; a
+    // failed inspection still carries its trace so the cause is visible.
+    filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr,
+                             verbose || !report.succeeded());
+    return report.exit_code;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -89,13 +117,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (std::string_view(argv[1]) == "inspect-image" || std::string_view(argv[1]) == "inspect") {
-        if (argc != 3) {
-            std::cerr << "Usage: filerelic inspect-image <path>\n";
-            return 2;
-        }
-        const auto report = filerelic::inspect_image(argv[2]);
-        filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr);
-        return report.exit_code;
+        return run_inspect(argc, argv);
     }
 
     if (std::string_view(argv[1]) == "demo") {

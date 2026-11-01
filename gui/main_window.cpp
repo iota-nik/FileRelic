@@ -212,7 +212,9 @@ void MainWindow::inspectImage(const QString& imagePath) {
 
 void MainWindow::inspectionFinished() {
     const filerelic::InspectionReport report = inspectionWatcher_->result();
-    rawReport_ = QString::fromStdString(report.rendered_text);
+    // The Advanced log is the scanner's step trace; all results shown in the
+    // cards come from the typed report fields, not from this text.
+    rawReport_ = QString::fromStdString(filerelic::render_trace(report));
     rawLog_->setPlainText(rawReport_);
     chooseButton_->setEnabled(true);
     analyzeButton_->setEnabled(!selectedImagePath_.isEmpty());

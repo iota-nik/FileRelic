@@ -11,6 +11,8 @@ Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, 
 - [Project roadmap and agent timing](docs/ROADMAP.md)
 - [Cyclomatic-complexity PDF](docs/CYCLOMATIC_COMPLEXITY.pdf)
 - [detect_file_system() control-flow graph](docs/DETECT_FILE_SYSTEM_CFG.png)
+- [Filesystem adapter contract (draft)](docs/ADAPTER_CONTRACT.md)
+- [Sleuth Kit research brief](docs/TSK_RESEARCH_BRIEF.md)
 - [Qt desktop-shell build notes](gui/README.md)
 - [Original project proposal](references/ORIGINAL_PROJECT_PROPOSAL.pdf)
 - [Supplied diagrams](references/diagrams/)
@@ -19,21 +21,23 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition/file-system findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; the ext-shaped fixture also exercises selected superblock, directory, and inode reads. FileRelic does not yet provide general file inventory or recovery.
+The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition, filesystem, and ext root-directory/inode findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; the ext-shaped fixture also exercises selected superblock, directory, and inode reads. FileRelic does not yet provide general file inventory or recovery.
 
-## Build the current scaffold
+## Build
+
+One root build produces the shared core, the CLI, and (when Qt 6 is installed) the GUI:
 
 ```bash
 cmake -S . -B build
 cmake --build build
 ./build/filerelic --help
-./build/filerelic inspect-image /path/to/disk-image.raw
+./build/filerelic inspect testdata/practice-fs-ext4.raw
+./build/filerelic inspect --verbose testdata/practice-fs-ext4.raw   # adds the step trace
 ./build/filerelic demo
+./build/gui/filerelic-gui                                           # if Qt 6 was found
 ```
 
-`CMakeLists.txt` builds the shared `filerelic_core` library and the `filerelic` CLI. `src/cli_main.cpp` handles `--help`, `--version`, and read-only `inspect-image`; `src/image_inspector.cpp` contains the inspection implementation used by both the CLI and GUI. The inspector accepts regular files only, reports their size, previews up to 16 bytes, validates partition layouts, and recognizes filesystem signatures. The CLI renders a typed summary and retains a detailed trace for findings not modeled yet. FileRelic does not mount or modify the image. The `build/` directory contains generated compiler output and is ignored by Git.
-
-To build and run the Qt GUI, see [gui/README.md](gui/README.md). It links the same core library and runs inspections off the UI thread.
+The inspector accepts regular files only and never modifies or mounts the image. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and [gui/README.md](gui/README.md) for GUI notes. The `build/` directory is ignored by Git.
 
 ## Safe practice image
 

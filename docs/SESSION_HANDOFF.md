@@ -5,11 +5,42 @@ contributor. Read it before changing code. It records the project owner's
 context and learning needs, what the project is meant to become, what has
 actually been implemented, and the safest next steps.
 
-**Last updated:** 2026-10-28  
+**Last updated:** 2026-11-02  
 **Repository:** `/home/nikunj/FileRelic`  
 **Project owner:** Nikunj, a student working on FileRelic with three other
 group members. Nikunj is learning software engineering and low-level storage
 concepts while the project is being built.
+
+## Update 2026-11-02 (read this first)
+
+Done since the 2026-10-28 text below was written:
+
+- ext directory entries and inode observations are typed (`DirectoryListing`,
+  `DirectoryEntryInfo`, `InodeInfo` in `image_inspector.h`); CLI and GUI cards
+  render them from those records.
+- The old text stream (`rendered_text`) is gone. `report.trace` is a step log
+  shown only by `filerelic inspect --verbose` and the GUI Advanced view.
+- One root `CMakeLists.txt` builds core + CLI + GUI (GUI automatic when Qt 6 is
+  found; `-DFILERELIC_BUILD_GUI=OFF` to skip). GUI binary: `build/gui/filerelic-gui`.
+  `gui/CMakeLists.txt` no longer defines its own core.
+- Core split into `image_source` (ReadOnlySource/FileImageSource),
+  `partition_scanner`, `filesystem_probe`, `ext_reader`, `image_inspector`.
+- Logical MBR partitions are numbered from 5 and flagged `logical`.
+- Fixed a signed-`char` comparison hazard while porting signature matching.
+- Draft adapter contract: `docs/ADAPTER_CONTRACT.md`. Research brief for a
+  group member: `docs/TSK_RESEARCH_BRIEF.md`.
+
+Verified when this was done: clean `-Wall -Wextra` build, identical CLI summaries
+for all ten fixtures except the intended logical-partition renaming and the new
+ext root-directory block, ~690 truncated/mutated images under ASan+UBSan with no
+crash, GUI binary builds and launches headless. Not verified: clicking through
+the GUI, Windows/macOS builds. No automated test suite exists yet.
+
+Next: wait for the TSK findings, review `ADAPTER_CONTRACT.md` with the group,
+then write the TSK adapter for ext4/NTFS inventory. Decode ext4 extent trees so
+real (non-fixture) ext4 images can be read. Then safe extraction, SHA-256, JSON
+manifest. Where the older sections below say the CLI appends a legacy trace, or
+that the GUI is configured separately, this update supersedes them.
 
 ## How to work with Nikunj
 

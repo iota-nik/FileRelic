@@ -41,7 +41,7 @@ This is a prototype of a forensic recovery tool, not yet a complete recovery sui
 | 1 — Image and MBR foundation | **Done:** bounded read-only image inspection, MBR/EBR validation, safe fixtures | byte offsets, sectors, partition bounds | Build together; no specialist needed |
 | 2 — GPT foundation | **Done:** protective MBR, primary/backup headers, CRC checks, partition array and fixture | checksums, redundant metadata, GUIDs | Build together; no specialist needed |
 | 3 — Shared inspection core | **Current baseline:** CMake core library; CLI and GUI call it; `InspectionReport` has typed table/partition/filesystem fields | library/API boundaries, value models, UI rendering | Keep one integrator while contracts are small |
-| 4 — Finish structured inspection | **Next:** typed ext directory/inode records, remaining warnings and validation details; retire the compatibility trace; make one root build for CLI + optional GUI | returning data rather than printing, model-driven rendering | Nikunj + primary coding agent; group members can review the report model and fixtures |
+| 4 — Finish structured inspection | **Done 2026-11-02:** typed ext directory/inode records, remaining warnings and validation details; retire the compatibility trace; make one root build for CLI + optional GUI | returning data rather than printing, model-driven rendering | Nikunj + primary coding agent; group members can review the report model and fixtures |
 | 5 — Real filesystem inventory | TSK (or a reviewed alternative) adapter; enumerate ext4 and NTFS files from controlled images | third-party parser boundary, allocated/deleted metadata versus recovery | One member researches parser/license/feature evidence while core API stabilizes |
 | 6 — Safe recovery and case data | Destination-only extraction, collision handling, SHA-256, statuses, versioned JSON manifest | streaming I/O, integrity limits, provenance | Separate contributors can own extraction safety and manifest schema after contracts freeze |
 | 7 — Recovery GUI and CLI workflows | Select candidates/destination, progress/cancel, inspect/export case report from same job API | asynchronous jobs, events, UI state | GUI and CLI work can split after the job API is stable |
@@ -66,7 +66,11 @@ Agents are helpers with narrow assignments; they are not a replacement for the m
 
 Never run several agents against the same shared files. Shared models are changed first, then each implementation branch consumes them, then the integrator runs end-to-end checks.
 
-## Immediate next step
+## Immediate next step (updated 2026-11-02)
+
+Phase 4 is done: typed ext findings, trace retired from the default output, one root build, core split into focused files. Now: group member completes `docs/TSK_RESEARCH_BRIEF.md`; the group reviews `docs/ADAPTER_CONTRACT.md`; then the TSK adapter (phase 5). The older text below describes the work that was just completed.
+
+## Previous next step
 
 Finish making `InspectionReport` the complete source of truth. Add typed ext
 directory entries and inode observations, record remaining parser warnings

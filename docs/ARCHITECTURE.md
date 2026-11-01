@@ -1,53 +1,57 @@
 # FileRelic Architecture: Current Stage
 
-FileRelic will have two user interfaces that share one recovery engine:
-
 ```text
 Command-line interface ─┐
-                        ├─ inspection / recovery engine ── raw image reader
-Desktop GUI ────────────┘
+                        ├─ InspectionReport ← inspect_image()
+Desktop GUI ────────────┘                          │
+                                      ┌────────────┴─────────────┐
+                                      │  partition_scanner       │ MBR / EBR / GPT
+                                      │  filesystem_probe        │ signatures
+                                      │  ext_reader              │ ext metadata
+                                      └────────────┬─────────────┘
+                                                   ▼
+                                      ReadOnlySource (FileImageSource)
 ```
 
-The command-line interface is for repeatable commands and automation. The Qt desktop GUI provides image selection and readable inspection cards. Both call the same inspection core and consume the shared `InspectionReport`; the GUI does not launch the CLI or parse its output.
+Dependencies point inward: the CLI and GUI know only `image_inspector.h`; the
+scanners know `ReadOnlySource` and the report types; nothing reads a file path
+except `FileImageSource`.
 
-## Current implementation
+## Source files (`src/`)
 
-- `src/cli_main.cpp` is the CLI front door. It interprets commands such as `inspect-image`.
-- `src/image_inspector.h` declares the callable image-inspection API.
-- `src/image_inspector.cpp` implements that API and is built as `filerelic_core`.
-- `filerelic::inspect_image(path)` opens a file read-only and returns an
-  `InspectionReport`. The report owns the source image path, byte size, success
-  status, typed partition-table and partition records, filesystem metadata,
-  warnings, presentation sections, and the current human-readable diagnostic
-  trace.
-- `filerelic::render_report(report, output)` is the CLI presentation layer. It
-  writes an existing report to a terminal but does not perform parsing itself.
-- `gui/` contains a Qt desktop shell linked to the same `filerelic_core`
-  library as the CLI. It calls `inspect_image` on a worker thread and then
-  displays the returned report. It no longer starts a separate CLI process.
+| File | Responsibility |
+| --- | --- |
+| `image_source.*` | `ReadOnlySource` interface and `FileImageSource`. Every read is bounds- and overflow-checked, capped at 16 MiB, and there is no write method. |
+| `byte_utils.h` | Little-endian readers and CRC-32. |
+| `scan_context.h` | Internal: the source plus the report being filled, and `trace()`. |
+| `partition_scanner.*` | MBR, extended MBR (EBR chain, logical partitions numbered from 5), GPT with CRC checks. |
+| `filesystem_probe.*` | Signature detection for NTFS, APFS, XFS, ext-family, Btrfs. A signature is evidence, not support. |
+| `ext_reader.*` | Small ext2/3/4 reader: superblock, first group descriptor, root directory (direct blocks only), inodes in the first group. |
+| `image_inspector.*` | `inspect_image()`, report sections, `render_report()`, `render_trace()`. |
+| `cli_main.cpp` | CLI argument handling and `demo`. |
 
-The parser now fills typed partition and filesystem records while reading the
-image. The GUI builds cards from those records through `InspectionReport`;
-the CLI prints a summary from the same fields, then appends the detailed trace
-for findings that do not have typed fields yet. That trace is written into a
-per-inspection stream, not by redirecting process-wide `std::cout`/`std::cerr`.
-Future work can add typed ext directory/inode findings and remove the trace.
+## Report model
 
-The code remains in a small number of source files while we learn the concepts.
-The inspection implementation now builds as a core library target. The public
-API prevents later parser reorganizations from changing how the CLI or GUI asks
-for an inspection.
+`InspectionReport` holds typed partition records, `FileSystemInfo` (including
+`limitations` and an ext `DirectoryListing` of `DirectoryEntryInfo` / `InodeInfo`),
+warnings, diagnostics and presentation sections. Unknown values stay explicit
+(`std::optional`, empty strings, `limitation` text) rather than becoming zero.
 
-## Running the CLI
+`report.trace` is a step log for `filerelic inspect --verbose` and the GUI
+Advanced view. Results are never recovered from it.
 
-`./build/filerelic` is a normal compiled CLI program. It feels like a local script right now because it has not been installed into a system command directory yet. During development, running it from `build/` is normal:
+## Build
+
+One root `CMakeLists.txt` builds `filerelic_core`, the `filerelic` CLI, and, when
+Qt 6 is found, `gui/filerelic-gui`. See [../gui/README.md](../gui/README.md).
 
 ```bash
-./build/filerelic inspect-image testdata/practice-mbr.raw
+cmake -S . -B build && cmake --build build
+./build/filerelic inspect testdata/practice-fs-ext4.raw
+./build/filerelic inspect --verbose testdata/practice-fs-ext4.raw
 ```
 
-Later, CMake packaging will install `filerelic` into a location on your shell `PATH`, allowing this form from any directory:
+## Next boundary
 
-```bash
-filerelic inspect-image /path/to/image.raw
-```
+See [ADAPTER_CONTRACT.md](ADAPTER_CONTRACT.md) for the proposed filesystem
+adapter interface that a Sleuth Kit backend would implement.
