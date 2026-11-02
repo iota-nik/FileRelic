@@ -17,6 +17,7 @@ add_library(filerelic_core STATIC
     src/report_sections.cpp
     src/report_text.cpp
     src/case_manifest.cpp
+    src/ntfs_adapter.cpp
     src/image_inspector.cpp
     src/volume_access.cpp
 )
@@ -26,6 +27,13 @@ target_include_directories(filerelic_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
 add_executable(filerelic src/cli_main.cpp)
 target_link_libraries(filerelic PRIVATE filerelic_core)
 target_compile_definitions(filerelic PRIVATE FILERELIC_VERSION="${PROJECT_VERSION}")
+
+enable_testing()
+add_test(NAME cli-report-smoke
+    COMMAND filerelic report ${CMAKE_CURRENT_SOURCE_DIR}/testdata/practice-fs-ext4.raw
+            ${CMAKE_CURRENT_BINARY_DIR}/cli-report-smoke.json)
+
+target_compile_definitions(filerelic_core PUBLIC FILERELIC_VERSION="${PROJECT_VERSION}")
 
 # --- Optional Qt desktop GUI. Built automatically when Qt 6 is installed;
 # otherwise the CLI still builds. Turn it off with -DFILERELIC_BUILD_GUI=OFF.

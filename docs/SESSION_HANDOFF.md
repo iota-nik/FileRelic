@@ -43,6 +43,8 @@ Working:
   case-workflow panel for selecting a destination folder and exporting a versioned JSON manifest.
 - Case manifest/report layer: a shared `src/case_manifest.*` helper writes a versioned JSON manifest
   from the `InspectionReport`, and the CLI exposes `filerelic report <image> [output.json]`.
+- NTFS adapter contract: a conservative `src/ntfs_adapter.*` status module documents the current design
+  boundary, with a clear limitation that NTFS inventory and deleted-file recovery remain future work.
 - Synthetic fixtures in `testdata/` (generator `tools/create_practice_image.py`)
   and generated real ext4 images (`tools/create_real_ext4_fixture.py`, git-ignored,
   Linux + e2fsprogs) checked by `tools/verify_real_ext4.py`.
