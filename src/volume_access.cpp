@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <system_error>
 
 #include "image_source.h"
+#include "report_format.h"
 #include "sha256.h"
 
 namespace filerelic {
@@ -221,10 +223,101 @@ FileReadSummary read_file(const std::filesystem::path& image,
     return summary;
 }
 
-ExtractionResult extract_file(const std::filesystem::path& image,
-                              std::uint64_t partition_number,
-                              const std::string& path,
-                              const std::filesystem::path& output_directory) {
+FileReadSummary read_deleted_file(const std::filesystem::path& image,
+                                  std::uint64_t partition_number,
+                                  const std::string& path,
+                                  std::uint32_t inode_number,
+                                  const ByteSink& sink) {
+    FileReadSummary summary;
+    const std::string full = normalize(path);
+    const std::size_t slash = full.find_last_of('/');
+    const std::string directory = slash == 0 ? "/" : full.substr(0, slash);
+    const std::string leaf = full.substr(slash + 1);
+    if (leaf.empty()) {
+        summary.error = "give the folder and the deleted name, e.g. /docs/old.txt";
+        return summary;
+    }
+    OpenedVolume opened = open_volume(image, partition_number);
+    if (!opened.volume) {
+        summary.error = opened.error;
+        return summary;
+    }
+    const ExtVolume::Resolved folder = opened.volume->resolve(directory);
+    if (!folder.ok) {
+        summary.error = folder.error;
+        return summary;
+    }
+    if (folder.inode.kind != InodeKind::directory) {
+        summary.error = "not a folder: " + directory;
+        return summary;
+    }
+    DeletedListing listing;
+    opened.volume->list_deleted(folder.inode, listing);
+
+    std::vector<const DeletedEntryInfo*> matches;
+    for (const DeletedEntryInfo& entry : listing.entries) {
+        if (entry.name == leaf && (inode_number == 0 || entry.inode_number == inode_number)) {
+            matches.push_back(&entry);
+        }
+    }
+    if (matches.empty()) {
+        summary.error = "no deleted name '" + leaf + "' found in " + directory
+            + (inode_number != 0 ? " with inode " + std::to_string(inode_number) : std::string())
+            + " (run 'filerelic ls --deleted' to see what is there)";
+        return summary;
+    }
+    if (matches.size() > 1) {
+        summary.error = "several deleted entries are called '" + leaf + "'; choose one with --inode:";
+        for (const DeletedEntryInfo* match : matches) {
+            summary.error += "\n  inode " + std::to_string(match->inode_number) + "  ("
+                + describe_deleted_status(match->status) + ")";
+        }
+        return summary;
+    }
+    const DeletedEntryInfo& chosen = *matches.front();
+    summary.partition_number = opened.partition_number;
+    summary.inode_number = chosen.inode_number;
+    if (chosen.inode_number == 0) {
+        summary.partition_number = 0;       // nothing was read
+        summary.error = "the filesystem erased this entry's inode number, so FileRelic cannot tell "
+                        "which file's data to read";
+        return summary;
+    }
+
+    Sha256 hasher;
+    ExtVolume::RecoveryDetails details;
+    const ContentReadResult content = opened.volume->recover_deleted_content(
+        chosen.inode_number, [&](const std::uint8_t* data, std::size_t length) {
+            hasher.update(data, length);
+            return sink(data, length);
+        }, details);
+    summary.status = content.status;
+    summary.error = content.error;
+    summary.notes = content.notes;
+    summary.expected_size = content.expected_size;
+    summary.bytes_delivered = content.bytes_delivered;
+    summary.sha256_hex = hasher.finish_hex();
+    summary.recovered_from = details.source;
+    summary.from_journal = details.from_journal;
+    summary.blocks_total = details.total_blocks;
+    summary.blocks_reused = details.reused_blocks + details.unverifiable_blocks;
+    if (content.bytes_delivered == 0 && content.status == ReadStatus::failed) {
+        summary.partition_number = 0;       // nothing was read: just report the reason
+    }
+    if (!listing.limitation.empty()) {
+        summary.notes.push_back("the deleted-name scan of the folder may be incomplete: " + listing.limitation);
+    }
+    return summary;
+}
+
+namespace {
+
+// Shared by extract_file and extract_deleted_file: picks a safe output name,
+// writes "<name>.partial", and finalizes only when the read was complete.
+ExtractionResult extract_common(const std::filesystem::path& image,
+                                const std::string& path,
+                                const std::filesystem::path& output_directory,
+                                const std::function<FileReadSummary(const ByteSink&)>& reader) {
     ExtractionResult result;
 
     std::string leaf;
@@ -261,12 +354,10 @@ ExtractionResult extract_file(const std::filesystem::path& image,
         result.read.error = "could not create output file: " + partial_path.string();
         return result;
     }
-    result.read = read_file(image, partition_number, path,
-                            [&output](const std::uint8_t* data, std::size_t length) {
-                                output.write(reinterpret_cast<const char*>(data),
-                                             static_cast<std::streamsize>(length));
-                                return static_cast<bool>(output);
-                            });
+    result.read = reader([&output](const std::uint8_t* data, std::size_t length) {
+        output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(length));
+        return static_cast<bool>(output);
+    });
     output.close();
     if (output.fail() && result.read.status == ReadStatus::complete) {
         result.read.status = ReadStatus::failed;
@@ -288,6 +379,27 @@ ExtractionResult extract_file(const std::filesystem::path& image,
         std::filesystem::remove(partial_path, error);
     }
     return result;
+}
+
+} // namespace
+
+ExtractionResult extract_file(const std::filesystem::path& image,
+                              std::uint64_t partition_number,
+                              const std::string& path,
+                              const std::filesystem::path& output_directory) {
+    return extract_common(image, path, output_directory, [&](const ByteSink& sink) {
+        return read_file(image, partition_number, path, sink);
+    });
+}
+
+ExtractionResult extract_deleted_file(const std::filesystem::path& image,
+                                      std::uint64_t partition_number,
+                                      const std::string& path,
+                                      std::uint32_t inode_number,
+                                      const std::filesystem::path& output_directory) {
+    return extract_common(image, path, output_directory, [&](const ByteSink& sink) {
+        return read_deleted_file(image, partition_number, path, inode_number, sink);
+    });
 }
 
 } // namespace filerelic

@@ -10,8 +10,10 @@ appears in `image_inspector.h`, the CLI, or the GUI.
 ext reader already takes a source plus a partition start offset, which is the
 shape every adapter needs. It also already implements `list_allocated`,
 `read_file_content` and `list_deleted_metadata` for ext2/3/4 (`ExtVolume::list_deleted`,
-statuses in `DeletedStatus`), a working reference for what an adapter must report
-for deleted entries: name evidence plus an honest status, never a recovery claim.
+statuses in `DeletedStatus`) and a deleted-content read (`recover_deleted_content`: bitmap-checked,
+zero-fills reused blocks, PARTIAL status, journal fallback). That is a working reference for what an
+adapter must report for deleted entries: name evidence plus an honest status, and a recovery result
+that separates "bytes read" from "proven original".
 
 ## Proposed interface
 

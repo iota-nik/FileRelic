@@ -31,3 +31,6 @@ recovered/
 # Large generated fixtures (python3 tools/create_real_ext4_fixture.py)
 testdata/real-*.raw
 __pycache__/
+
+# Generated deleted-file fixtures (python3 tools/create_deleted_fixture.py)
+testdata/deleted-*.raw

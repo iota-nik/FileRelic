@@ -128,6 +128,8 @@ std::unique_ptr<ExtVolume> ExtVolume::open(ReadOnlySource& source,
     geometry.blocks_count = le32(superblock + 4);
     geometry.first_data_block = le32(superblock + 20);
     geometry.blocks_per_group = le32(superblock + 32);
+    geometry.has_journal = (compatible_features & 0x4U) != 0;
+    geometry.journal_inode = le32(superblock + 0xE0);
     if (geometry.is_64bit) {
         geometry.blocks_count |= static_cast<std::uint64_t>(le32(superblock + 0x150)) << 32U;
     }
@@ -331,8 +333,13 @@ InodeInfo ExtVolume::read_inode(std::uint32_t inode_number) {
         info.limitation = "could not read inode " + std::to_string(inode_number);
         return info;
     }
-    const std::uint8_t* inode = raw.bytes.data();
+    return decode_inode(raw.bytes.data());
+}
 
+// Decodes one raw inode (geometry_.inode_size bytes): type, size, and where the
+// data lives. Used for live inodes and for old copies found in the journal.
+InodeInfo ExtVolume::decode_inode(const std::uint8_t* inode) {
+    InodeInfo info;
     const std::uint16_t type = le16(inode) & 0xf000U;
     const std::uint32_t flags = le32(inode + 32);
 
@@ -643,6 +650,10 @@ void ExtVolume::judge_deleted(DeletedEntryInfo& entry, BitmapCache& cache) {
         } else {
             entry.status = DeletedStatus::block_map_cleared;
             entry.note = "the inode no longer lists any data blocks";
+            if (geometry_.has_journal && geometry_.journal_inode != 0) {
+                entry.note += "; an older copy of the inode may still be in the journal "
+                              "('extract --deleted' looks for it)";
+            }
         }
         return;
     }
@@ -837,6 +848,275 @@ void ExtVolume::list_deleted(const InodeInfo& directory, DeletedListing& listing
         judge_deleted(entry, cache);
         listing.entries.push_back(std::move(entry));
     }
+}
+
+// ----------------------------------------------------------- journal ------
+
+namespace {
+constexpr std::uint32_t jbd2_magic = 0xC03B3998U;
+std::uint32_t be32(const std::uint8_t* b) {
+    return (static_cast<std::uint32_t>(b[0]) << 24U) | (static_cast<std::uint32_t>(b[1]) << 16U)
+         | (static_cast<std::uint32_t>(b[2]) << 8U) | static_cast<std::uint32_t>(b[3]);
+}
+std::uint16_t be16(const std::uint8_t* b) {
+    return static_cast<std::uint16_t>((b[0] << 8U) | b[1]);
+}
+} // namespace
+
+// Looks through the whole journal area for older copies of the inode-table block
+// that holds `inode_number`. When a file is deleted the filesystem often erases
+// the inode's block map, but an earlier journaled copy of that inode (from before
+// the delete) can still be sitting in the journal. The journal is only read.
+// Returns "" on success, otherwise why nothing could be searched.
+std::string ExtVolume::find_journal_copies(std::uint32_t inode_number,
+                                           std::vector<JournalInodeCopy>& out) {
+    out.clear();
+    if (!geometry_.has_journal || geometry_.journal_inode == 0) {
+        return "this filesystem has no internal journal";
+    }
+    std::uint64_t inode_offset = 0;
+    std::string reason;
+    if (!locate_inode(inode_number, inode_offset, reason)) {
+        return reason;
+    }
+    const std::uint64_t relative = inode_offset - start_;
+    const std::uint64_t target_block = relative / geometry_.block_size;
+    const std::size_t in_block = static_cast<std::size_t>(relative % geometry_.block_size);
+    if (in_block + geometry_.inode_size > geometry_.block_size) {
+        return "inode does not fit in one block";
+    }
+
+    const InodeInfo journal = read_inode(geometry_.journal_inode);
+    if (!journal.read || journal.kind != InodeKind::regular_file || journal.extents.empty()
+        || !journal.limitation.empty()) {
+        return "the journal inode could not be read";
+    }
+    std::vector<ExtentInfo> extents = journal.extents;
+    std::stable_sort(extents.begin(), extents.end(),
+                     [](const ExtentInfo& a, const ExtentInfo& b) { return a.logical_block < b.logical_block; });
+
+    // journal block number -> physical block in the filesystem (0 = unmapped)
+    const auto map_block = [&](std::uint64_t logical) -> std::uint64_t {
+        for (const ExtentInfo& extent : extents) {
+            if (!extent.uninitialized && logical >= extent.logical_block
+                && logical < extent.logical_block + extent.length_blocks) {
+                return extent.physical_block + (logical - extent.logical_block);
+            }
+        }
+        return 0;
+    };
+    const auto read_journal_block = [&](std::uint64_t logical) {
+        const std::uint64_t physical = map_block(logical);
+        if (physical == 0 || physical >= geometry_.blocks_count) {
+            return ReadResult{{}, std::string("journal block outside the volume")};
+        }
+        return source_.read(start_ + physical * geometry_.block_size, geometry_.block_size);
+    };
+
+    const ReadResult superblock = read_journal_block(0);
+    if (!superblock.ok() || be32(superblock.bytes.data()) != jbd2_magic) {
+        return "the journal superblock is missing or damaged";
+    }
+    const std::uint8_t* jsb = superblock.bytes.data();
+    const std::uint32_t block_type = be32(jsb + 4);
+    if (block_type != 3 && block_type != 4) {
+        return "the journal superblock has an unexpected type";
+    }
+    if (be32(jsb + 12) != geometry_.block_size) {
+        return "the journal block size differs from the filesystem's";
+    }
+    const std::uint64_t max_len = be32(jsb + 16);
+    const std::uint64_t first = std::max<std::uint32_t>(be32(jsb + 20), 1);
+    const std::uint32_t incompatible = block_type == 4 ? be32(jsb + 0x28) : 0;
+    const bool is_64bit = (incompatible & 0x2U) != 0;
+    const bool csum_v2 = (incompatible & 0x8U) != 0;
+    const bool csum_v3 = (incompatible & 0x10U) != 0;
+    const bool has_csum = csum_v2 || csum_v3;
+    if (max_len < 2 || max_len > 4ULL * 1024 * 1024) {
+        return "the journal size is not plausible";
+    }
+    const std::size_t tag_bytes = csum_v3 ? 16 : ((csum_v2 ? 14 : 12) - (is_64bit ? 0 : 4));
+
+    std::string problem;
+    std::uint64_t logical = first;
+    std::uint64_t scanned = 0;
+    while (logical < max_len) {
+        if (++scanned > max_len + 1) break;
+        const ReadResult block = read_journal_block(logical);
+        if (!block.ok()) {
+            if (map_block(logical) == 0) { ++logical; continue; }
+            problem = "part of the journal could not be read";
+            ++logical;
+            continue;
+        }
+        const std::uint8_t* header = block.bytes.data();
+        if (be32(header) != jbd2_magic || be32(header + 4) != 1) {      // 1 = descriptor block
+            ++logical;
+            continue;
+        }
+        const std::uint32_t sequence = be32(header + 8);
+        const std::size_t limit = geometry_.block_size - (has_csum ? 4 : 0);
+        std::size_t position = 12;
+        std::uint64_t tags = 0;
+        while (position + tag_bytes <= limit) {
+            const std::uint8_t* tag = header + position;
+            std::uint64_t target = be32(tag);
+            std::uint32_t flags;
+            if (csum_v3) {
+                flags = be32(tag + 4);
+                if (is_64bit) target |= static_cast<std::uint64_t>(be32(tag + 8)) << 32U;
+            } else {
+                flags = be16(tag + 6);
+                if (is_64bit) target |= static_cast<std::uint64_t>(be32(tag + 8)) << 32U;
+            }
+            position += tag_bytes;
+            if ((flags & 0x2U) == 0) position += 16;                    // UUID follows unless SAME_UUID
+            if (target == target_block && out.size() < 64) {
+                std::uint64_t data_block = logical + 1 + tags;
+                if (data_block >= max_len) data_block = data_block - max_len + first;   // log wrapped
+                const ReadResult copy = read_journal_block(data_block);
+                if (copy.ok()) {
+                    std::vector<std::uint8_t> bytes = copy.bytes;
+                    if ((flags & 0x1U) != 0) {                            // ESCAPE: magic was zeroed
+                        bytes[0] = 0xC0; bytes[1] = 0x3B; bytes[2] = 0x39; bytes[3] = 0x98;
+                    }
+                    JournalInodeCopy found;
+                    found.sequence = sequence;
+                    found.journal_block = data_block;
+                    const std::uint8_t* raw = bytes.data() + in_block;
+                    found.mode = le16(raw);
+                    found.links_count = le16(raw + 26);
+                    found.dtime = le32(raw + 20);
+                    found.inode = decode_inode(raw);
+                    out.push_back(std::move(found));
+                }
+            }
+            ++tags;
+            if ((flags & 0x8U) != 0) break;                              // LAST_TAG
+        }
+        logical += 1 + std::max<std::uint64_t>(tags, 0);
+    }
+    std::stable_sort(out.begin(), out.end(), [](const JournalInodeCopy& a, const JournalInodeCopy& b) {
+        return a.sequence > b.sequence;                                  // newest transaction first
+    });
+    return problem;
+}
+
+// ------------------------------------------------------ recovery ----------
+
+ContentReadResult ExtVolume::recover_deleted_content(std::uint32_t inode_number,
+                                                     const ByteSink& sink,
+                                                     RecoveryDetails& details) {
+    constexpr std::uint64_t max_blocks_checked = 8ULL * 1024 * 1024;
+    ContentReadResult failure;
+    details = RecoveryDetails{};
+
+    RawInode raw;
+    if (inode_number == 0 || !read_raw_inode(inode_number, raw)) {
+        failure.error = "the inode could not be read";
+        return failure;
+    }
+    if (raw.links_count > 0 && raw.dtime == 0) {
+        failure.error = "inode " + std::to_string(inode_number) + " is in use by a file that exists "
+            "now; extracting it would copy a different file's data, so FileRelic refuses";
+        return failure;
+    }
+    InodeInfo inode = read_inode(inode_number);
+    if (inode.read && (inode.kind == InodeKind::directory || inode.kind == InodeKind::symbolic_link)) {
+        failure.error = "only regular files can be recovered (this entry was a "
+            + std::string(inode.kind == InodeKind::directory ? "folder" : "link") + ")";
+        return failure;
+    }
+    if (inode.size_bytes && *inode.size_bytes == 0 && inode.kind == InodeKind::regular_file) {
+        ContentReadResult empty;
+        empty.status = ReadStatus::complete;
+        empty.notes.push_back("the deleted file was empty; there was nothing to recover");
+        details.source = "the deleted inode";
+        return empty;
+    }
+
+    details.source = "the deleted inode";
+    if (inode.extents.empty()) {
+        std::vector<JournalInodeCopy> copies;
+        const std::string journal_problem = find_journal_copies(inode_number, copies);
+        const JournalInodeCopy* chosen = nullptr;
+        for (const JournalInodeCopy& copy : copies) {
+            // A usable "before" picture: a live regular file with a block map.
+            if (copy.links_count > 0 && copy.dtime == 0 && copy.inode.read
+                && copy.inode.kind == InodeKind::regular_file && !copy.inode.extents.empty()
+                && copy.inode.size_bytes && *copy.inode.size_bytes > 0) {
+                chosen = &copy;
+                break;
+            }
+        }
+        if (chosen == nullptr) {
+            failure.error = "the filesystem erased where this file's data was, and no usable older "
+                "copy of the inode was found in the journal";
+            if (!journal_problem.empty()) failure.error += " (" + journal_problem + ")";
+            return failure;
+        }
+        inode = chosen->inode;
+        details.from_journal = true;
+        details.journal_sequence = chosen->sequence;
+        details.source = "an older copy of the inode from the journal (transaction "
+            + std::to_string(chosen->sequence) + ")";
+    }
+
+    // Blocks that something else owns now must not be copied out as if they were
+    // this file's data. They are replaced by zeros (by marking them unwritten),
+    // and the result is reported as PARTIAL.
+    BitmapCache cache;
+    std::vector<ExtentInfo> safe;
+    std::uint64_t checked = 0;
+    for (const ExtentInfo& extent : inode.extents) {
+        if (extent.uninitialized) {
+            safe.push_back(extent);
+            continue;
+        }
+        std::uint32_t run_start = 0;
+        bool run_usable = true;
+        const auto flush = [&](std::uint32_t end) {
+            if (end > run_start) {
+                ExtentInfo piece = extent;
+                piece.logical_block = extent.logical_block + run_start;
+                piece.physical_block = extent.physical_block + run_start;
+                piece.length_blocks = end - run_start;
+                piece.uninitialized = !run_usable;
+                safe.push_back(piece);
+            }
+        };
+        for (std::uint32_t index = 0; index < extent.length_blocks; ++index) {
+            if (++checked > max_blocks_checked) {
+                failure.error = "too many data blocks to check safely";
+                return failure;
+            }
+            const BlockState state = block_state(extent.physical_block + index, cache);
+            const bool usable = state == BlockState::free_block;
+            ++details.total_blocks;
+            if (state == BlockState::allocated) ++details.reused_blocks;
+            if (state == BlockState::unknown) ++details.unverifiable_blocks;
+            if (index == 0) {
+                run_usable = usable;
+            } else if (usable != run_usable) {
+                flush(index);
+                run_start = index;
+                run_usable = usable;
+            }
+        }
+        flush(extent.length_blocks);
+    }
+    inode.extents = std::move(safe);
+
+    ContentReadResult result = read_content(inode, sink);
+    if (details.reused_blocks != 0 || details.unverifiable_blocks != 0) {
+        result.status = ReadStatus::partial;
+        std::string message = std::to_string(details.reused_blocks + details.unverifiable_blocks)
+            + " of " + std::to_string(details.total_blocks)
+            + " data blocks are in use by other data now (or lie outside the volume) and were "
+              "replaced with zeros, not copied";
+        result.error = result.error.empty() ? message : result.error + "; " + message;
+    }
+    return result;
 }
 
 // ------------------------------------------------------------ content -----

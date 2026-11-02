@@ -82,26 +82,39 @@ void print_ls_help(std::ostream& out) {
         << "  -d, --deleted       List names that were deleted from the directory but\n"
         << "                      are still on disk. Each gets a status; none is a promise\n"
         << "                      that the file can be recovered.\n"
+        << "                      To get one back: filerelic extract --deleted ...\n"
         << "  -h, --help          Show this help\n\n"
         << "Example: filerelic ls testdata/real-ext4-1024.raw /docs\n"
         << "         filerelic ls --deleted testdata/real-ext4-1024.raw /docs\n";
 }
 
 void print_cat_help(std::ostream& out) {
-    out << "Usage: filerelic cat [--partition N] <image> <path>\n\n"
+    out << "Usage: filerelic cat [--partition N] [--deleted [--inode N]] <image> <path>\n\n"
         << "Writes the file's bytes to standard output. A status line with the byte\n"
         << "count and SHA-256 goes to standard error, so output can be piped or saved.\n\n"
-        << "Example: filerelic cat testdata/real-ext4-1024.raw /hello.txt\n";
+        << "  -d, --deleted       <path> is a DELETED name (folder + name, see 'ls --deleted').\n"
+        << "                      Bytes of blocks now used by other data are replaced by zeros\n"
+        << "                      and the result is reported as PARTIAL.\n"
+        << "  -i, --inode N       With --deleted: choose one entry when several share a name\n\n"
+        << "Example: filerelic cat testdata/real-ext4-1024.raw /hello.txt\n"
+        << "         filerelic cat --deleted testdata/real-ext4-1024.raw /hello.txt\n";
 }
 
 void print_extract_help(std::ostream& out) {
-    out << "Usage: filerelic extract [--partition N] <image> <path> <outdir>\n\n"
+    out << "Usage: filerelic extract [--partition N] [--deleted [--inode N]] <image> <path> <outdir>\n\n"
         << "Copies one file out of the image into <outdir> (created if needed).\n"
         << "Never overwrites an existing file and never writes into the image. The copy\n"
         << "is written as <name>.partial and renamed only when it is complete.\n"
         << "The SHA-256 identifies the OUTPUT bytes; it does not prove the recovery is\n"
         << "complete or identical to the original file.\n\n"
-        << "Example: filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered\n";
+        << "  -d, --deleted       <path> is a DELETED name (folder + name, see 'ls --deleted').\n"
+        << "                      FileRelic uses the deleted inode's block map or, if the\n"
+        << "                      filesystem erased it, an older copy of the inode from the\n"
+        << "                      journal. Blocks now used by other data are NOT copied: they\n"
+        << "                      become zeros and the result is PARTIAL (kept as <name>.partial).\n"
+        << "  -i, --inode N       With --deleted: choose one entry when several share a name\n\n"
+        << "Example: filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered\n"
+        << "         filerelic extract --deleted testdata/real-ext4-1024.raw /hello.txt ./recovered\n";
 }
 
 std::filesystem::path find_demo_data_directory(const char* executable_path) {
@@ -165,6 +178,7 @@ struct VolumeArgs {
     bool help = false;
     bool verbose = false;
     bool deleted = false;
+    std::uint32_t inode = 0;        // with --deleted: pick one entry by inode number
     std::string error;
 };
 
@@ -178,6 +192,19 @@ VolumeArgs parse_volume_args(const std::vector<std::string_view>& args) {
             parsed.verbose = true;
         } else if (argument == "-d" || argument == "--deleted") {
             parsed.deleted = true;
+        } else if (argument == "-i" || argument == "--inode") {
+            if (index + 1 >= args.size()) {
+                parsed.error = "missing number after " + std::string(argument);
+                return parsed;
+            }
+            const std::string value(args[++index]);
+            char* end = nullptr;
+            const unsigned long long number = std::strtoull(value.c_str(), &end, 10);
+            if (value.empty() || *end != '\0' || number == 0 || number > 0xffffffffULL) {
+                parsed.error = "inode must be a positive number, got '" + value + "'";
+                return parsed;
+            }
+            parsed.inode = static_cast<std::uint32_t>(number);
         } else if (argument == "-p" || argument == "--partition") {
             if (index + 1 >= args.size()) {
                 parsed.error = "missing number after " + std::string(argument);
@@ -259,8 +286,9 @@ int run_ls_deleted(const VolumeArgs& parsed, const std::string& path) {
               << " found (partition " << result.partition_number << ")\n";
     for (const auto& entry : result.listing.entries) print_deleted_line(entry, parsed.verbose);
     std::cout << "Note: a deleted name is evidence, not a recovered file. Nothing was read or\n"
-              << "      extracted. Only names still inside this directory's blocks are shown;\n"
-              << "      deleted files whose names are gone, or older copies in the journal, are not.\n";
+              << "      extracted by this listing. Only names still inside this directory's blocks\n"
+              << "      are shown; deleted files whose names are gone are not. To try to get one\n"
+              << "      back: filerelic extract --deleted <image> <folder>/<name> <outdir>\n";
     if (!result.listing.limitation.empty()) {
         std::cerr << "Warning: the scan may be incomplete - " << result.listing.limitation << '\n';
         return exit_failed;
@@ -275,6 +303,7 @@ int run_ls(const std::vector<std::string_view>& args) {
     if (parsed.positional.empty() || parsed.positional.size() > 2) {
         return usage_error("ls", "expected <image> and an optional <path>", print_ls_help);
     }
+    if (parsed.inode != 0) return usage_error("ls", "--inode only applies to cat/extract --deleted", print_ls_help);
     const std::string path = parsed.positional.size() == 2 ? parsed.positional[1] : "/";
     if (parsed.deleted) return run_ls_deleted(parsed, path);
 
@@ -308,9 +337,12 @@ int run_ls(const std::vector<std::string_view>& args) {
 
 void print_read_summary(const filerelic::FileReadSummary& summary, std::ostream& out) {
     using filerelic::ReadStatus;
+    const bool deleted = summary.inode_number != 0;
     switch (summary.status) {
     case ReadStatus::complete:
-        out << "Result:   Complete - the whole file was read.\n"; break;
+        out << (deleted ? "Result:   Complete - every recorded data block was read and none had been reused.\n"
+                        : "Result:   Complete - the whole file was read.\n");
+        break;
     case ReadStatus::partial:
         out << "Result:   PARTIAL - only part of the file could be read; treat it as damaged.\n"; break;
     default:
@@ -319,6 +351,15 @@ void print_read_summary(const filerelic::FileReadSummary& summary, std::ostream&
     out << "Size:     " << filerelic::format_size_short(summary.bytes_delivered) << " read of "
         << filerelic::format_size_short(summary.expected_size) << " expected\n"
         << "SHA-256:  " << summary.sha256_hex << "  (fingerprint of the bytes that were output)\n";
+    if (deleted) {
+        out << "Source:   deleted entry, inode " << summary.inode_number;
+        if (!summary.recovered_from.empty()) out << ", from " << summary.recovered_from;
+        out << '\n';
+        if (summary.blocks_total != 0) {
+            out << "Blocks:   " << summary.blocks_reused << " of " << summary.blocks_total
+                << " data blocks reused by other data (zero-filled)\n";
+        }
+    }
     for (const std::string& note : summary.notes) out << "Note:     " << note << '\n';
     if (!summary.error.empty()) out << "Problem:  " << summary.error << '\n';
 }
@@ -327,18 +368,23 @@ int run_cat(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_cat_help(std::cout); return exit_ok; }
     if (!parsed.error.empty()) return usage_error("cat", parsed.error, print_cat_help);
-    if (parsed.deleted) return usage_error("cat", "--deleted only applies to ls", print_cat_help);
+    if (parsed.inode != 0 && !parsed.deleted) {
+        return usage_error("cat", "--inode needs --deleted", print_cat_help);
+    }
     if (parsed.positional.size() != 2) {
         return usage_error("cat", "expected <image> and <path>", print_cat_help);
     }
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);      // file bytes must not be altered by text mode
 #endif
-    const filerelic::FileReadSummary summary = filerelic::read_file(
-        parsed.positional[0], parsed.partition, parsed.positional[1],
-        [](const std::uint8_t* data, std::size_t length) {
-            return std::fwrite(data, 1, length, stdout) == length;
-        });
+    const filerelic::ByteSink to_stdout = [](const std::uint8_t* data, std::size_t length) {
+        return std::fwrite(data, 1, length, stdout) == length;
+    };
+    const filerelic::FileReadSummary summary = parsed.deleted
+        ? filerelic::read_deleted_file(parsed.positional[0], parsed.partition,
+                                       parsed.positional[1], parsed.inode, to_stdout)
+        : filerelic::read_file(parsed.positional[0], parsed.partition,
+                               parsed.positional[1], to_stdout);
     std::fflush(stdout);
     // Nothing was read at all (bad path, wrong partition, ...): just say why.
     if (summary.status == filerelic::ReadStatus::failed && summary.partition_number == 0) {
@@ -353,22 +399,31 @@ int run_extract(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_extract_help(std::cout); return exit_ok; }
     if (!parsed.error.empty()) return usage_error("extract", parsed.error, print_extract_help);
-    if (parsed.deleted) return usage_error("extract", "--deleted only applies to ls", print_extract_help);
+    if (parsed.inode != 0 && !parsed.deleted) {
+        return usage_error("extract", "--inode needs --deleted", print_extract_help);
+    }
     if (parsed.positional.size() != 3) {
         return usage_error("extract", "expected <image> <path> <outdir>", print_extract_help);
     }
-    const filerelic::ExtractionResult result = filerelic::extract_file(
-        parsed.positional[0], parsed.partition, parsed.positional[1], parsed.positional[2]);
+    const filerelic::ExtractionResult result = parsed.deleted
+        ? filerelic::extract_deleted_file(parsed.positional[0], parsed.partition,
+                                          parsed.positional[1], parsed.inode, parsed.positional[2])
+        : filerelic::extract_file(parsed.positional[0], parsed.partition,
+                                  parsed.positional[1], parsed.positional[2]);
     if (result.read.status == filerelic::ReadStatus::failed && result.output_path.empty()) {
         std::cerr << "filerelic extract: " << result.read.error << '\n';
         return exit_failed;
     }
-    std::cout << "Extracted " << parsed.positional[1] << " from partition "
+    std::cout << (parsed.deleted ? "Recovered deleted " : "Extracted ") << parsed.positional[1] << " from partition "
               << result.read.partition_number << "\n"
               << "Saved to: " << result.output_path.string() << '\n';
     print_read_summary(result.read, std::cout);
     std::cout << "\nNote: the SHA-256 fingerprint describes the saved bytes only. It cannot prove\n"
               << "the file matches what the original owner had.\n";
+    if (parsed.deleted) {
+        std::cout << "A deleted file can only be recovered as far as its blocks survive. Compare it\n"
+                  << "with other evidence before relying on it.\n";
+    }
     return result.read.status == filerelic::ReadStatus::complete ? exit_ok : exit_failed;
 }
 

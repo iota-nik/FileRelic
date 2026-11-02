@@ -72,7 +72,33 @@ debugfs -w -R "rm /hello.txt" "/tmp/deleted-test.raw?offset=1048576"
 
 (`debugfs rm` keeps the file's block list, so the status is usually "data likely
 intact". A real kernel delete often erases it, giving "the filesystem erased where
-the data was".) `debugfs ls -d "<image>?offset=1048576" /` is an independent way to
+the data was".) Recover it with:
+
+```bash
+./build/filerelic extract --deleted /tmp/deleted-test.raw /hello.txt ./recovered
+./build/filerelic extract --deleted /tmp/deleted-test.raw /docs/readme.txt ./recovered
+```
+
+Note: `real-ext4-*.raw` was made without a journal, so a block map erased by a delete
+cannot be recovered there (FileRelic says "this filesystem has no internal journal").
+For all the deletion cases use the purpose-built fixture (needs `mke2fs`/`debugfs`):
+
+```bash
+python3 tools/create_deleted_fixture.py          # or: ... 4096
+./build/filerelic ls --deleted testdata/deleted-fixture-1024.raw /deleted-demo
+./build/filerelic extract --deleted testdata/deleted-fixture-1024.raw /deleted-demo/intact.bin ./recovered
+```
+
+It prints the original SHA-256 of every file. Expected results in `/deleted-demo`:
+
+| File | What happened | `extract --deleted` |
+|---|---|---|
+| `intact.bin` | deleted normally, block map kept | Complete; SHA-256 equals the original |
+| `journal.bin` | deleted and block map erased, inode was journaled earlier | Complete, "from an older copy of the inode from the journal"; SHA-256 equals the original |
+| `overwritten.bin` | deleted, first half of its blocks marked in use again | PARTIAL; those blocks are zeros, the rest equals the original; saved as `.partial` |
+| `lost.bin` | deleted, block map erased, nothing in the journal | fails with an explanation, no file written |
+| `empty.txt` | empty file, deleted | Complete, 0 bytes |
+| `keep.txt` | never deleted | not listed by `ls --deleted` | `debugfs ls -d "<image>?offset=1048576" /` is an independent way to
 list the same deleted names; entries whose inode number was zeroed appear only in
 FileRelic.
 

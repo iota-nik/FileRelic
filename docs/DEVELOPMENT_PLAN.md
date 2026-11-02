@@ -15,9 +15,9 @@ partition scanner, filesystem probe and ext reader, and a Qt GUI. The CLI and GU
 both render the typed `InspectionReport`, which contains partition-table,
 partition, filesystem-signature, ext superblock, root-directory/inode/extent,
 warning and diagnostic data. The old text trace is now only an optional step log
-(`--verbose`, GUI Advanced). Deleted-name listing on ext2/3/4 (`ls --deleted`, status only, no
-content read) exists. General file inventory, deleted-file
-recovery, extraction, case storage, and cross-platform packaging remain future
+(`--verbose`, GUI Advanced). Deleted-name listing and recovery on ext2/3/4 (`ls --deleted`,
+`extract --deleted`, journal fallback, PARTIAL on reused blocks) exist. General file inventory, deleted-file
+recovery on other file systems, case storage, case storage, and cross-platform packaging remain future
 work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 

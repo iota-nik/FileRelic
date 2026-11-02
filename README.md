@@ -21,7 +21,7 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition, filesystem, and ext root-directory/inode findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; for ext-family images FileRelic reads the superblock, group descriptors, ext4 extent trees, and the root directory (checked against `debugfs` on real `mke2fs` images; see [testdata/README.md](testdata/README.md)). `ls`, `cat` and `extract` list directories and copy files out of ext2/3/4 images with a SHA-256 of the output. `ls --deleted` lists names unlinked from a directory but still on disk, each with an honest status (never a recovery promise). It does not yet recover deleted files, and NTFS/APFS/XFS/Btrfs are signature-detection only.
+The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition, filesystem, and ext root-directory/inode findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; for ext-family images FileRelic reads the superblock, group descriptors, ext4 extent trees, and the root directory (checked against `debugfs` on real `mke2fs` images; see [testdata/README.md](testdata/README.md)). `ls`, `cat` and `extract` list directories and copy files out of ext2/3/4 images with a SHA-256 of the output. `ls --deleted` lists names unlinked from a directory but still on disk, each with an honest status (never a recovery promise). `extract --deleted` / `cat --deleted` then try to read such a file back: from the deleted inode's block map, or, when the filesystem erased it, from an older copy of the inode found in the ext4 journal. Blocks that other data has reused are zero-filled, never copied, and the result is PARTIAL. Only ext2/3/4 is covered; NTFS/APFS/XFS/Btrfs are signature-detection only.
 
 ## Build
 
@@ -35,6 +35,8 @@ cmake --build build
 ./build/filerelic inspect --verbose testdata/practice-fs-ext4.raw   # adds the step trace
 ./build/filerelic ls testdata/real-ext4-1024.raw /docs                 # needs the generated fixture
 ./build/filerelic ls --deleted testdata/real-ext4-1024.raw /docs      # names deleted from a folder, with status
+python3 tools/create_deleted_fixture.py     # builds testdata/deleted-fixture-1024.raw
+./build/filerelic extract --deleted testdata/deleted-fixture-1024.raw /deleted-demo/intact.bin ./recovered
 ./build/filerelic cat testdata/real-ext4-1024.raw /hello.txt
 ./build/filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered
 ./build/filerelic demo

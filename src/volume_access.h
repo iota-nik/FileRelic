@@ -42,6 +42,12 @@ struct FileReadSummary {
     std::uint64_t expected_size = 0;
     std::uint64_t bytes_delivered = 0;
     std::string sha256_hex;                 // of the delivered bytes
+    // Only filled when a DELETED entry was recovered:
+    std::uint32_t inode_number = 0;
+    std::string recovered_from;             // "the deleted inode" / "an older copy ... journal"
+    bool from_journal = false;
+    std::uint64_t blocks_total = 0;         // data blocks the block map lists
+    std::uint64_t blocks_reused = 0;        // of those, in use by other data now (zero-filled)
 };
 
 struct ExtractionResult {
@@ -59,6 +65,25 @@ ListingResult list_path(const std::filesystem::path& image,
 DeletedListingResult list_deleted_path(const std::filesystem::path& image,
                                        std::uint64_t partition_number,
                                        const std::string& path);
+
+// Recovers a DELETED file: `path` is the folder plus the deleted name (for example
+// "/docs/b.bin", see `ls --deleted`). `inode_number` picks one entry when several
+// deleted names match (0 = not given). Uses the deleted inode's block map or, when
+// that was erased, an older copy from the journal. Blocks now owned by other data
+// are zero-filled and the result is PARTIAL. Never claims the bytes are the original.
+FileReadSummary read_deleted_file(const std::filesystem::path& image,
+                                  std::uint64_t partition_number,
+                                  const std::string& path,
+                                  std::uint32_t inode_number,
+                                  const ByteSink& sink);
+
+// extract_file() for a deleted entry (same output rules: never overwrites, writes
+// "<name>.partial" first, final name only when complete).
+ExtractionResult extract_deleted_file(const std::filesystem::path& image,
+                                      std::uint64_t partition_number,
+                                      const std::string& path,
+                                      std::uint32_t inode_number,
+                                      const std::filesystem::path& output_directory);
 
 // Streams a file's bytes to `sink` and hashes what was delivered.
 FileReadSummary read_file(const std::filesystem::path& image,

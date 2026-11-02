@@ -27,8 +27,8 @@ except `FileImageSource`.
 | `partition_scanner.*` | MBR, extended MBR (EBR chain, logical partitions numbered from 5), GPT with CRC checks. |
 | `filesystem_probe.*` | Signature detection for NTFS, APFS, XFS, ext-family, Btrfs. A signature is evidence, not support. |
 | `sha256.*` | Streaming SHA-256 (verified against hashlib/sha256sum on boundary sizes and a 5 MiB file). |
-| `volume_access.*` | High-level `list_path`, `read_file`, `extract_file`: pick the partition, open the ext volume, stream/hash/extract. The CLI and later the GUI call only these. |
-| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). Also `list_deleted()`: scans directory blocks for names left in slack space (and first-in-block entries whose inode was zeroed), then judges each from its inode (dtime, link count, size, block map) and the block bitmap. No inline data, encryption, journal replay, or symlink targets yet. |
+| `volume_access.*` | High-level `list_path`, `list_deleted_path`, `read_file`, `extract_file` and their deleted twins `read_deleted_file`, `extract_deleted_file` (share one output-writing helper, so `.partial`/never-overwrite rules are identical): pick the partition, open the ext volume, stream/hash/extract. The CLI and later the GUI call only these. |
+| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). Also `list_deleted()`: scans directory blocks for names left in slack space (and first-in-block entries whose inode was zeroed), then judges each from its inode (dtime, link count, size, block map) and the block bitmap. Also `recover_deleted_content()`: reads a deleted regular file via its inode's block map or, if that was erased, via an older inode copy found by `find_journal_copies()` (scans the jbd2 journal area read-only: descriptor blocks, 32/64-bit tags, csum v2/v3, wrap-around). It checks every data block against the block bitmap, zero-fills blocks now owned by other data and reports PARTIAL; it refuses inodes that belong to a live file. No inline data, encryption, journal replay (the journal is searched, never replayed), external journals, or symlink targets yet. |
 | `report_format.*` | Plain-language wording helpers shared by every interface: human sizes ("1.0 MiB"), partition-type names, filesystem descriptions, file/folder wording. Change wording here, once. |
 | `report_sections.*` | `build_sections()`: turns the typed results into `ReportSection`s (title, `Severity`, one-sentence summary, label/value `ReportRow`s, notes). |
 | `report_text.cpp` | `render_report()`: draws the sections as terminal text. Technical rows, `(detail)` text and the step trace appear only with `-v`. |
@@ -66,7 +66,7 @@ cmake -S . -B build && cmake --build build
 
 ## CLI conventions
 
-Shape: `filerelic <command> [options] [arguments]`. `ls --deleted` (`-d`) lists deleted names in one directory. Commands: `inspect`, `ls`, `cat`, `extract`,
+Shape: `filerelic <command> [options] [arguments]`. `ls --deleted` (`-d`) lists deleted names in one directory; `cat`/`extract` accept `--deleted` (path = folder + deleted name) and `--inode N` to pick one of several same-named entries. Commands: `inspect`, `ls`, `cat`, `extract`,
 `demo`, `version`, `help`. Every command accepts `-h/--help`. Results go to stdout;
 usage errors and failed operations go to stderr. Exit codes: 0 success,
 1 operation failed (e.g. unreadable image), 2 usage error. New commands should follow the same rules. `cat` writes file bytes to stdout and its Result/Size/SHA-256 lines to stderr. `inspect-image` is a
@@ -74,7 +74,7 @@ deprecated alias for `inspect`.
 
 ## Next boundary
 
-Real-image validation: `tools/create_real_ext4_fixture.py` and `tools/verify_real_ext4.py` (compare with `debugfs`).
+Real-image validation: `tools/create_real_ext4_fixture.py` and `tools/verify_real_ext4.py` (compare with `debugfs`). Deleted-file cases: `tools/create_deleted_fixture.py` (journal-recovery and reused-block fixtures with known SHA-256 values).
 
 See [ADAPTER_CONTRACT.md](ADAPTER_CONTRACT.md) for the proposed filesystem
 adapter interface that a Sleuth Kit backend would implement.

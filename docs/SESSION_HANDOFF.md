@@ -28,7 +28,7 @@ Working:
   root directory. Validated against `debugfs` on two real `mke2fs` images
   (1 KiB and 4 KiB blocks): 135 entries each, 0 mismatches. Content is read
   via `ExtVolume::read_content`; inline-data files, symlink
-  targets, and directory extraction are not supported. **Deleted-name listing** (`ExtVolume::list_deleted`, `ls --deleted`): finds names left in directory slack space and entries whose inode number was zeroed; each gets a `DeletedStatus` (name_only, inode_in_use, empty_file, block_map_cleared, blocks_reused, blocks_partly_reused, likely_intact, unknown). It never reads file content, so `likely_intact` only means the recorded blocks are free now. Not covered: deleted inodes no directory names, journal copies, deleted names inside htree index slack, and recursion into subdirectories.
+  targets, and directory extraction are not supported. **Deleted-name listing** (`ExtVolume::list_deleted`, `ls --deleted`): finds names left in directory slack space and entries whose inode number was zeroed; each gets a `DeletedStatus` (name_only, inode_in_use, empty_file, block_map_cleared, blocks_reused, blocks_partly_reused, likely_intact, unknown). It never reads file content, so `likely_intact` only means the recorded blocks are free now. **Deleted-file recovery** (`ExtVolume::recover_deleted_content`, `extract --deleted`, `cat --deleted`, `--inode N`): path is folder + deleted name. Uses the deleted inode's extents, or when the filesystem erased them, the newest usable older inode copy from the journal (`find_journal_copies`). Every block is checked against the block bitmap; reused blocks are zero-filled (never copied, so another file's data cannot leak into a recovery) and the result is PARTIAL/`.partial`. Live inode numbers and erased inode numbers are refused. COMPLETE only means "every recorded block was read and was free"; it does not prove the bytes are the original. Fixture generator: `python3 tools/create_deleted_fixture.py [1024|4096]` builds `testdata/deleted-fixture-<bs>.raw` (git-ignored) with intact / journal-recovered / partly-reused / lost / empty cases and prints the original SHA-256 values; expected results are tabulated in `testdata/README.md`. Verified (Linux, scratch images, not committed): byte-identical recovery vs the original files for intact maps and for journal recovery (real `debugfs jo/jw` journals, with and without checksums), correct PARTIAL when blocks were overwritten, refusals, and ~1,300 mutated images under ASan+UBSan with no crash. Not covered: deleted inodes no directory names (orphan scan), htree index slack, recursion into subdirectories, directory/symlink recovery, inline-data files, external journals, fast-commit areas, and real kernel-deleted images (no mount available when this was built).
 - CLI: `inspect [-v] <image>` (`inspect-image` is a deprecated alias), `ls [-v] [-p N] <image> [path]`, `cat [-p N] <image> <path>`, `extract [-p N] <image> <path> <outdir>`, `demo`, `version`, `help`. Exit codes 0/1/2.
 - File access inside ext images: path lookup, directory listing, file content for extent-mapped (ext4) and block-mapped (ext2/3, incl. double/triple indirect) files, sparse holes. `extract` writes `<name>.partial`, renames when complete, never overwrites, reports status (complete/PARTIAL/FAILED) and SHA-256 of the output bytes. Safety: 1 GiB cap on zero-filled holes per file; overlapping extents rejected; refuses to write over the source image.
 - Human-readable output (done): the core builds plain-language `ReportSection`s once
@@ -87,7 +87,7 @@ builds. There is no automated test suite.
 
 ## Recommended next sequence
 
-1. **Deleted-file visibility on ext4:** names done (`ls --deleted`). Still to do: an orphan-inode scan (dtime set, no name), then try a content read of a deleted entry and report honestly (only then may "recovered" be claimed, and only with fixture evidence). Also recursive/directory extraction and inline data.
+1. **Deleted files on ext4:** names (`ls --deleted`) and recovery (`extract --deleted`, with journal fallback) are done. Still to do: an orphan-inode scan (dtime set, no name), a controlled fixture made by a real kernel delete (`mount` a loop image, write, unmount, delete, unmount), recursive/directory extraction and inline data.
 2. **TSK research** (no teammate: do it in-session): `docs/TSK_RESEARCH_BRIEF.md`
    -> write `docs/TSK_FINDINGS.md` (version, license, per-filesystem capability,
    custom image backend, fixture commands) before NTFS work.
@@ -171,7 +171,7 @@ the old reference picture.
 - Do not add physical-device writes. Acquisition must be separately designed
   and read-only by default.
 - Never call a signature match “filesystem support” without qualification.
-- Do not claim deleted-file recovery until controlled fixtures demonstrate it.
+- Deleted-file recovery claims are limited to what the scratch-image evidence above shows (ext2/3/4 only); never claim a recovered file is the original, only that its recorded blocks were read.
 - Preserve source paths, parser warnings, and limitations in results.
 - Keep Windows/macOS path handling in mind (`std::filesystem::path` and Qt
   Unicode conversion); avoid Linux-only assumptions in shared code.
