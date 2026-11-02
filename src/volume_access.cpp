@@ -214,7 +214,7 @@ FileReadSummary read_file(const std::filesystem::path& image,
         summary.partition_number = 0;       // nothing was read
         return summary;
     }
-    if (target.inode.kind != InodeKind::regular_file) {
+    if (target.inode.kind != InodeKind::regular_file && target.inode.kind != InodeKind::symbolic_link) {
         summary.partition_number = 0;       // nothing was read
         summary.error = std::string(target.inode.kind == InodeKind::directory
                                         ? "is a directory (extracting directories is not supported yet)"
@@ -223,6 +223,29 @@ FileReadSummary read_file(const std::filesystem::path& image,
     }
 
     Sha256 hasher;
+    if (target.inode.kind == InodeKind::symbolic_link) {
+        const std::string payload = target.inode.link_target;
+        std::size_t remaining = payload.size();
+        std::size_t offset = 0;
+        while (remaining > 0) {
+            const std::size_t take = std::min<std::size_t>(remaining, 1024 * 1024);
+            if (!sink(reinterpret_cast<const std::uint8_t*>(payload.data() + offset), take)) {
+                summary.error = "the output could not be written";
+                summary.status = ReadStatus::failed;
+                return summary;
+            }
+            hasher.update(reinterpret_cast<const std::uint8_t*>(payload.data() + offset), take);
+            offset += take;
+            remaining -= take;
+        }
+        summary.status = ReadStatus::complete;
+        summary.expected_size = payload.size();
+        summary.bytes_delivered = payload.size();
+        summary.sha256_hex = hasher.finish_hex();
+        summary.notes.push_back("fast symlink target read from the inode");
+        return summary;
+    }
+
     const ContentReadResult content = opened.volume->read_content(
         target.inode, [&](const std::uint8_t* data, std::size_t length) {
             hasher.update(data, length);

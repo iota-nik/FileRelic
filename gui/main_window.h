@@ -2,8 +2,10 @@
 
 #include <QMainWindow>
 #include <QFutureWatcher>
+#include <QProgressBar>
 #include <QString>
 
+#include "case_manifest.h"
 #include "image_inspector.h"
 
 class QCheckBox;
@@ -25,6 +27,8 @@ public:
 private slots:
     void chooseImage();
     void analyzeImage();
+    void chooseOutputDirectory();
+    void exportCaseReport();
     void inspectionFinished();
     void toggleRawLog(bool visible);
     void toggleDetails(bool shown);
@@ -35,19 +39,25 @@ private:
     void clearResults();
     void addSectionCard(const filerelic::ReportSection& section);
     void addResultCard(const QString& title, const QString& content, const QString& tone = {});
+    void updateWorkflowState();
 
     QLabel* selectedImage_;
     QLabel* imageDetails_;
     QLabel* status_;
     QPushButton* chooseButton_;
     QPushButton* analyzeButton_;
+    QPushButton* reportButton_;
+    QPushButton* destinationButton_;
     QPlainTextEdit* rawLog_;
     QToolButton* rawLogToggle_;
     QCheckBox* detailsToggle_;
+    QProgressBar* workflowProgress_;
+    QLabel* exportLocation_;
     QWidget* resultsContainer_;
     QVBoxLayout* resultsLayout_;
     QFutureWatcher<filerelic::InspectionReport>* inspectionWatcher_;
     QString selectedImagePath_;
+    QString exportDirectory_;
     QString rawReport_;
     filerelic::InspectionReport report_;
     bool haveReport_ = false;

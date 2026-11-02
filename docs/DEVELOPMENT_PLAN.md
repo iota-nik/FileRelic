@@ -8,7 +8,7 @@ This plan is intended to be split across multiple developers or coding agents. K
 
 ## Current implementation snapshot
 
-(Updated 2026-11-02.) The repository has progressed beyond the initial scaffold.
+(Updated 2026-11-03.) The repository has progressed beyond the initial scaffold.
 It includes MBR/EBR/GPT read-only inspection, synthetic and generated real-ext4
 fixtures, a shared `filerelic_core` library split into a read-only image source,
 partition scanner, filesystem probe and ext reader, and a Qt GUI. The CLI and GUI
@@ -16,8 +16,10 @@ both render the typed `InspectionReport`, which contains partition-table,
 partition, filesystem-signature, ext superblock, root-directory/inode/extent,
 warning and diagnostic data. The old text trace is now only an optional step log
 (`--verbose`, GUI Advanced). Deleted-name listing and recovery on ext2/3/4 (`ls --deleted`,
-`extract --deleted`, journal fallback, PARTIAL on reused blocks) exist. General file inventory, deleted-file
-recovery on other file systems, case storage, case storage, and cross-platform packaging remain future
+`extract --deleted`, journal fallback, PARTIAL on reused blocks) exist. A minimal,
+versioned JSON case-manifest writer is now available through `filerelic report` and
+in the GUI export workflow. General file inventory, deleted-file recovery on other
+file systems, richer job orchestration, and cross-platform packaging remain future
 work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 

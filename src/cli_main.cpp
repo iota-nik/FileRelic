@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "case_manifest.h"
 #include "image_inspector.h"
 #include "report_format.h"
 #include "volume_access.h"
@@ -45,6 +46,8 @@ void print_help(std::ostream& out) {
         << "  cat <image> <path>        Print a file's contents from inside the image\n"
         << "  extract <image> <path> <outdir>\n"
         << "                    Copy a file out of the image, with a SHA-256 of the output\n"
+        << "  report <image> [out.json]\n"
+        << "                    Export a JSON case manifest plus a short case summary\n"
         << "  demo              Inspect every bundled practice image (needs ./testdata)\n"
         << "  version           Print the version (also: --version, -V)\n"
         << "  help [command]    Show help (also: --help, -h)\n\n"
@@ -71,6 +74,15 @@ void print_demo_help(std::ostream& out) {
         << "tools/create_real_ext4_fixture.py, those are included too.\n";
 }
 
+void print_report_help(std::ostream& out) {
+    out << "Usage: filerelic report [--output <path>] [--name <case>] [--examiner <name>] <image>\n\n"
+        << "Exports a versioned JSON case manifest for the selected image.\n\n"
+        << "Options:\n"
+        << "  -o, --output <path>  Write the manifest to this path instead of the default\n"
+        << "  -n, --name <case>    Optional case title recorded in the manifest\n"
+        << "  -e, --examiner <name>  Optional examiner name added to the manifest\n"
+        << "  -h, --help           Show this help\n";
+}
 
 void print_ls_help(std::ostream& out) {
     out << "Usage: filerelic ls [-v] [--deleted] [--partition N] <image> [path]\n\n"
@@ -475,6 +487,70 @@ int run_extract(const std::vector<std::string_view>& args) {
     return result.read.status == filerelic::ReadStatus::complete ? exit_ok : exit_failed;
 }
 
+int run_report(const std::vector<std::string_view>& args) {
+    std::string image_path;
+    std::filesystem::path output_path;
+    std::string case_name;
+    std::string examiner;
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        const std::string_view argument = args[index];
+        if (argument == "-h" || argument == "--help") {
+            print_report_help(std::cout);
+            return exit_ok;
+        }
+        if (argument == "-o" || argument == "--output") {
+            if (index + 1 >= args.size()) {
+                return usage_error("report", "missing path after --output", print_report_help);
+            }
+            output_path = std::filesystem::path(std::string(args[++index]));
+            continue;
+        }
+        if (argument == "-n" || argument == "--name") {
+            if (index + 1 >= args.size()) {
+                return usage_error("report", "missing case name after --name", print_report_help);
+            }
+            case_name = std::string(args[++index]);
+            continue;
+        }
+        if (argument == "-e" || argument == "--examiner") {
+            if (index + 1 >= args.size()) {
+                return usage_error("report", "missing examiner after --examiner", print_report_help);
+            }
+            examiner = std::string(args[++index]);
+            continue;
+        }
+        if (argument.size() > 1 && argument.front() == '-') {
+            return usage_error("report", "unknown option '" + std::string(argument) + "'", print_report_help);
+        }
+        if (image_path.empty()) {
+            image_path = std::string(argument);
+        } else if (output_path.empty()) {
+            output_path = std::filesystem::path(std::string(argument));
+        } else {
+            return usage_error("report", "expected one image path and an optional output path", print_report_help);
+        }
+    }
+    if (image_path.empty()) {
+        return usage_error("report", "missing <image>", print_report_help);
+    }
+
+    const auto report = filerelic::inspect_image(std::filesystem::path(image_path));
+    const std::filesystem::path default_output = std::filesystem::path(image_path).parent_path() /
+        (std::filesystem::path(image_path).stem().string() + ".manifest.json");
+    const std::filesystem::path destination = output_path.empty() ? default_output : output_path;
+    const filerelic::CaseManifestOptions manifest_options{case_name, examiner, destination.parent_path().string()};
+    if (output_path.empty()) {
+        std::cout << filerelic::render_case_manifest_json(report, manifest_options) << '\n';
+    } else if (!filerelic::write_case_manifest_json(report, destination, manifest_options)) {
+        std::cerr << "filerelic report: could not write manifest to '" << destination.string() << "'\n";
+        return exit_failed;
+    }
+
+    std::cout << "Case report: " << destination.string() << '\n';
+    std::cout << filerelic::render_case_report_text(report, manifest_options) << '\n';
+    return report.succeeded() ? exit_ok : exit_failed;
+}
+
 int run_demo(const std::vector<std::string_view>& args, const char* executable_path) {
     for (const std::string_view argument : args) {
         if (argument == "-h" || argument == "--help") {
@@ -546,6 +622,7 @@ int run_help(const std::vector<std::string_view>& args) {
     if (args[0] == "ls") { print_ls_help(std::cout); return exit_ok; }
     if (args[0] == "cat") { print_cat_help(std::cout); return exit_ok; }
     if (args[0] == "extract") { print_extract_help(std::cout); return exit_ok; }
+    if (args[0] == "report" || args[0] == "manifest") { print_report_help(std::cout); return exit_ok; }
     std::cerr << "filerelic help: unknown command '" << args[0] << "'\n";
     return exit_usage;
 }
@@ -586,6 +663,9 @@ int main(int argc, char* argv[]) {
     }
     if (command == "extract") {
         return run_extract(args);
+    }
+    if (command == "report" || command == "manifest") {
+        return run_report(args);
     }
     if (command == "demo") {
         return run_demo(args, argv[0]);

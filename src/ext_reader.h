@@ -11,9 +11,10 @@
 // entry's bytes stay in the previous entry's slack space) and judges each one
 // from its inode and the block bitmap. It never reads or recovers file content.
 //
-// Does NOT understand (reported as limitations, never faked): inline data,
-// encryption, journal replay, symbolic-link targets, external journals,
-// deleted inodes that no directory entry names any more.
+// Does NOT understand (reported as limitations, never faked): encryption,
+// journal replay, external journals, deleted inodes that no directory entry
+// names any more. Inline regular files and fast symlinks are supported when the
+// data fits in the inode itself.
 //
 // Recovery of a deleted regular file (recover_deleted_content): reads the blocks
 // the deleted inode still lists, or, if the filesystem erased that map, an older

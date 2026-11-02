@@ -33,6 +33,7 @@ The immediate goal is a credible, working prototype suitable for demonstration b
 - It has a short demonstration guide explaining the commands, expected output, and next planned stages.
 - `ls --orphaned` now reports ext-family inodes that have `dtime` set and are no longer reachable from any live directory entry. This is an honest orphan scan, not a full deleted-file recovery engine.
 - Recursive directory extraction is now supported for ext-family directories via `filerelic extract <image> <dir> <outdir>`, preserving the relative tree under the chosen output directory while keeping the same partial-write safety checks.
+- Inline regular files and fast symlinks stored directly in the inode are now read as content; inline directories remain an unsupported traversal edge case.
 
 This is a prototype of a forensic recovery tool, not yet a complete recovery suite. It must not claim that it recovers deleted files until extraction code and controlled-fixture evidence exist.
 
@@ -45,8 +46,8 @@ This is a prototype of a forensic recovery tool, not yet a complete recovery sui
 | 3 — Shared inspection core | **Current baseline:** CMake core library; CLI and GUI call it; `InspectionReport` has typed table/partition/filesystem fields | library/API boundaries, value models, UI rendering | Keep one integrator while contracts are small |
 | 4 — Finish structured inspection | **Done 2026-11-02:** typed ext directory/inode/extent records, trace retired from default output, one root build for CLI + optional GUI | returning data rather than printing, model-driven rendering | Nikunj + primary coding agent; group members can review the report model and fixtures |
 | 5 — Real filesystem inventory | TSK (or a reviewed alternative) adapter; enumerate ext4 and NTFS files from controlled images | third-party parser boundary, allocated/deleted metadata versus recovery | One member researches parser/license/feature evidence while core API stabilizes |
-| 6 — Safe recovery and case data | Destination-only extraction, collision handling, SHA-256, statuses, versioned JSON manifest | streaming I/O, integrity limits, provenance | Separate contributors can own extraction safety and manifest schema after contracts freeze |
-| 7 — Recovery GUI and CLI workflows | Select candidates/destination, progress/cancel, inspect/export case report from same job API | asynchronous jobs, events, UI state | GUI and CLI work can split after the job API is stable |
+| 6 — Safe recovery and case data | **Current slice:** destination-only extraction, collision handling, SHA-256, statuses, versioned JSON manifest export via `filerelic report` and the GUI export flow | streaming I/O, integrity limits, provenance | A small shared report-manifest layer is now in place; the next step is broader job orchestration |
+| 7 — Recovery GUI and CLI workflows | **Current slice:** GUI image select/analyze/export workflow is live; destination folder selection and manifest export are now handled in the Qt shell | asynchronous jobs, events, UI state | The GUI still needs real scan-job state and candidate selection beyond the current single-report export |
 | 8 — Additional filesystem coverage | APFS with encryption/snapshot limits; XFS/Btrfs capability-gated and experimental | filesystem-specific evidence and support claims | Independent adapter/fixture work can run in separate directories |
 | 9 — Cross-platform packaging | Build/install on Linux, Windows, and macOS; fixture matrix and release artifacts | CMake packaging, dependencies, platform testing | Packaging owner plus platform reviewers |
 

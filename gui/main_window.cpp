@@ -3,14 +3,17 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QCheckBox>
+#include <QDir>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -41,9 +44,13 @@ MainWindow::MainWindow(QWidget* parent)
       status_(new QLabel("Ready — no image data will be modified.", this)),
       chooseButton_(new QPushButton("Choose image", this)),
       analyzeButton_(new QPushButton("Analyze image", this)),
+      reportButton_(new QPushButton("Export case report", this)),
+      destinationButton_(new QPushButton("Choose output folder", this)),
       rawLog_(new QPlainTextEdit(this)),
       rawLogToggle_(new QToolButton(this)),
       detailsToggle_(new QCheckBox("Show technical details (sector numbers, IDs, features)", this)),
+      workflowProgress_(new QProgressBar(this)),
+      exportLocation_(new QLabel("Output: default current project directory", this)),
       resultsContainer_(new QWidget(this)),
       resultsLayout_(new QVBoxLayout(resultsContainer_)),
       inspectionWatcher_(new QFutureWatcher<filerelic::InspectionReport>(this)) {
@@ -83,6 +90,9 @@ MainWindow::MainWindow(QWidget* parent)
     imageDetails_->setObjectName("muted");
     analyzeButton_->setObjectName("analyzeButton");
     analyzeButton_->setEnabled(false);
+    reportButton_->setEnabled(false);
+    destinationButton_->setEnabled(false);
+    exportLocation_->setObjectName("muted");
     auto* controls = new QHBoxLayout();
     controls->setSpacing(10);
     controls->addWidget(chooseButton_);
@@ -92,6 +102,17 @@ MainWindow::MainWindow(QWidget* parent)
     imageLayout->addWidget(selectedImage_);
     imageLayout->addWidget(imageDetails_);
     imageLayout->addLayout(controls);
+    imageLayout->addWidget(exportLocation_);
+    auto* workflowControls = new QHBoxLayout();
+    workflowControls->setSpacing(10);
+    workflowControls->addWidget(destinationButton_);
+    workflowControls->addWidget(reportButton_);
+    workflowControls->addStretch();
+    imageLayout->addLayout(workflowControls);
+    imageLayout->addWidget(workflowProgress_);
+    workflowProgress_->setRange(0, 100);
+    workflowProgress_->setValue(0);
+    workflowProgress_->setTextVisible(false);
     layout->addWidget(imageCard);
 
     resultsLayout_->setContentsMargins(0, 0, 0, 0);
@@ -170,11 +191,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(chooseButton_, &QPushButton::clicked, this, &MainWindow::chooseImage);
     connect(analyzeButton_, &QPushButton::clicked, this, &MainWindow::analyzeImage);
+    connect(destinationButton_, &QPushButton::clicked, this, &MainWindow::chooseOutputDirectory);
+    connect(reportButton_, &QPushButton::clicked, this, &MainWindow::exportCaseReport);
     connect(inspectionWatcher_, &QFutureWatcher<filerelic::InspectionReport>::finished,
             this, &MainWindow::inspectionFinished);
     connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
     connect(detailsToggle_, &QCheckBox::toggled, this, &MainWindow::toggleDetails);
 
+    exportDirectory_ = QDir::homePath() + "/FileRelicReports";
+    updateWorkflowState();
     addResultCard("Ready to inspect", "Choose a disk image, then select Analyze image.\n"
                   "You will see the image, partition layout, filesystem findings, and any warnings here.");
 }
@@ -192,6 +217,55 @@ void MainWindow::chooseImage() {
         imageDetails_->setText(info.fileName() + "  •  " + formatSize(info.size()));
         analyzeButton_->setEnabled(true);
         status_->setText("Image selected — ready for read-only inspection.");
+        updateWorkflowState();
+    }
+}
+
+void MainWindow::updateWorkflowState() {
+    const bool haveImage = !selectedImagePath_.isEmpty();
+    analyzeButton_->setEnabled(haveImage && !inspectionWatcher_->isRunning());
+    destinationButton_->setEnabled(haveImage);
+    reportButton_->setEnabled(haveImage && haveReport_);
+    exportLocation_->setText("Output: " + exportDirectory_);
+    workflowProgress_->setValue(haveReport_ ? 100 : 0);
+    workflowProgress_->setVisible(haveImage);
+}
+
+void MainWindow::chooseOutputDirectory() {
+    QString directory = QFileDialog::getExistingDirectory(
+        this,
+        "Choose the case-output directory",
+        exportDirectory_);
+    if (!directory.isEmpty()) {
+        exportDirectory_ = directory;
+        updateWorkflowState();
+        status_->setText("Report output directory ready — export when the image is analyzed.");
+    }
+}
+
+void MainWindow::exportCaseReport() {
+    if (selectedImagePath_.isEmpty() || !haveReport_) {
+        return;
+    }
+    const QString manifestPath = QFileDialog::getSaveFileName(
+        this,
+        "Save JSON case manifest",
+        exportDirectory_ + "/" + QFileInfo(selectedImagePath_).completeBaseName() + ".manifest.json",
+        "JSON files (*.json);;All files (*)");
+    if (manifestPath.isEmpty()) {
+        return;
+    }
+    const std::filesystem::path output = std::filesystem::path(manifestPath.toUtf8().constData());
+    const filerelic::CaseManifestOptions options{
+        "GUI case",
+        "GUI user",
+        output.parent_path().string(),
+    };
+    if (filerelic::write_case_manifest_json(report_, output, options)) {
+        status_->setText("Case manifest exported to " + QString::fromStdString(output.string()));
+        workflowProgress_->setValue(100);
+    } else {
+        status_->setText("Could not write the case manifest to the selected path.");
     }
 }
 
@@ -210,6 +284,8 @@ void MainWindow::inspectImage(const QString& imagePath) {
     rawLog_->clear();
     rawLogToggle_->setChecked(false);
     haveReport_ = false;
+    workflowProgress_->setValue(10);
+    updateWorkflowState();
     clearResults();
     addResultCard("Inspection in progress", "Reading the selected image in read-only mode.");
     const std::filesystem::path nativePath =
@@ -230,6 +306,7 @@ void MainWindow::inspectionFinished() {
     // The Advanced log is the scanner's step trace; all results shown in the
     // cards come from the typed report fields, not from this text.
     rawReport_ = QString::fromStdString(filerelic::render_trace(report));
+    updateWorkflowState();
     rawLog_->setPlainText(rawReport_);
     chooseButton_->setEnabled(true);
     analyzeButton_->setEnabled(!selectedImagePath_.isEmpty());
@@ -250,6 +327,7 @@ void MainWindow::loadImage(const QString& imagePath) {
     selectedImagePath_ = imagePath;
     imageDetails_->setText(info.fileName() + "  •  " + formatSize(info.size()));
     analyzeButton_->setEnabled(true);
+    updateWorkflowState();
     inspectImage(imagePath);
 }
 

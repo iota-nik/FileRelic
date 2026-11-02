@@ -16,6 +16,7 @@ add_library(filerelic_core STATIC
     src/report_format.cpp
     src/report_sections.cpp
     src/report_text.cpp
+    src/case_manifest.cpp
     src/image_inspector.cpp
     src/volume_access.cpp
 )

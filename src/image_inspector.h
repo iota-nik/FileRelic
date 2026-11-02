@@ -48,6 +48,8 @@ struct InodeInfo {
     InodeKind kind = InodeKind::unknown;
     std::optional<std::uint64_t> size_bytes;
     DataMapping mapping = DataMapping::unknown;
+    std::string inline_data;                   // inline regular-file bytes stored in the inode
+    std::string link_target;                   // fast symlink target stored directly in the inode
     std::optional<std::uint64_t> first_data_block;
     std::optional<std::uintmax_t> first_data_byte;   // relative to the image start
     std::vector<ExtentInfo> extents;                 // ext4 extent mapping, in file order

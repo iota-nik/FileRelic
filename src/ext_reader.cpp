@@ -363,10 +363,17 @@ InodeInfo ExtVolume::decode_inode(const std::uint8_t* inode) {
     info.size_bytes = size;
 
     if (info.kind == InodeKind::symbolic_link) {
-        return info;                             // targets are not decoded; links are not followed
+        if (size <= 60) {
+            info.link_target.assign(reinterpret_cast<const char*>(inode + 40),
+                                    static_cast<std::size_t>(size));
+            info.mapping = DataMapping::none;
+        }
+        return info;
     }
     if ((flags & inline_data_flag) != 0) {
-        info.limitation = "inline-data files are not supported yet";
+        const std::size_t inline_length = static_cast<std::size_t>(std::min<std::uint64_t>(size, 60));
+        info.inline_data.assign(reinterpret_cast<const char*>(inode + 40), inline_length);
+        info.mapping = DataMapping::none;
         return info;
     }
 
@@ -1195,13 +1202,43 @@ ContentReadResult ExtVolume::recover_deleted_content(std::uint32_t inode_number,
 
 ContentReadResult ExtVolume::read_content(const InodeInfo& file, const ByteSink& sink) {
     ContentReadResult result;
-    if (!file.read || file.kind != InodeKind::regular_file || !file.size_bytes) {
-        result.error = "not a readable regular file";
+    if (!file.read || !file.size_bytes) {
+        result.error = "not a readable file";
         return result;
     }
     const std::uint64_t size = *file.size_bytes;
     const std::uint64_t block_size = geometry_.block_size;
     result.expected_size = size;
+
+    if (file.kind == InodeKind::regular_file && !file.inline_data.empty()) {
+        result.notes.push_back("file data is stored inline in the inode");
+        if (size > file.inline_data.size()) {
+            result.error = "inline data is truncated: inode advertises "
+                + std::to_string(size) + " bytes but only stores "
+                + std::to_string(file.inline_data.size()) + " bytes";
+            result.status = ReadStatus::partial;
+            return result;
+        }
+        std::uint64_t remaining = size;
+        const std::uint8_t* data = reinterpret_cast<const std::uint8_t*>(file.inline_data.data());
+        while (remaining > 0) {
+            const std::uint64_t take = std::min<std::uint64_t>(remaining, read_chunk_bytes);
+            if (!sink(data, static_cast<std::size_t>(take))) {
+                result.error = "the output could not be written";
+                result.status = ReadStatus::failed;
+                return result;
+            }
+            data += take;
+            remaining -= take;
+            result.bytes_delivered += take;
+        }
+        result.status = ReadStatus::complete;
+        return result;
+    }
+    if (file.kind != InodeKind::regular_file) {
+        result.error = "not a readable regular file";
+        return result;
+    }
 
     // If the block map could not be fully decoded we can only deliver what is known.
     const bool map_incomplete = !file.limitation.empty();

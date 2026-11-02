@@ -13,10 +13,11 @@ a log only: no card reads it.
 - Draws the core's plain-language `ReportSection`s as cards (green = good, amber = warning, red = problem) with label/value rows.
 - "Show technical details" re-renders the same report with sector numbers, IDs and features.
 - `filerelic-gui <image>` opens and inspects an image immediately.
+- Lets the user choose an output folder and export a versioned case manifest once an inspection has succeeded.
 - Runs the inspection off the UI thread so the window stays responsive.
 
-This is still an inspection front-end, not a file recovery tool. It never writes
-to the selected image.
+This is still a read-only inspection front-end, not a full recovery tool. It never writes
+to the selected image itself; it only writes JSON case data to a separate output directory.
 
 ## Build
 

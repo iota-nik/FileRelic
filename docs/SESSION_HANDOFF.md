@@ -5,7 +5,7 @@ contributor. Read it before changing code. It records the project owner's
 context and learning needs, what the project is meant to become, what has
 actually been implemented, and the safest next steps.
 
-**Last updated:** 2026-11-03 (orphan scan added; docs reflect the current CLI and ext workflow)  
+**Last updated:** 2026-11-03 (case manifest/report export added; docs reflect the current CLI, ext workflow, and GUI export state)  
 **Repository:** `/home/nikunj/FileRelic`  
 **Project owner:** Nikunj, a student working on FileRelic with three other
 group members. Nikunj is learning software engineering and low-level storage
@@ -27,9 +27,10 @@ Working:
   inodes in any block group; ext4 extent trees including index levels; multi-block
   root directory. Validated against `debugfs` on two real `mke2fs` images
   (1 KiB and 4 KiB blocks): 135 entries each, 0 mismatches. Content is read
-  via `ExtVolume::read_content`; inline-data files and symlink targets remain
-  unsupported, but recursive directory extraction is now supported for ext-family
-  directory trees. **Deleted-name listing** (`ExtVolume::list_deleted`, `ls --deleted`): finds names left in directory slack space and entries whose inode number was zeroed; each gets a `DeletedStatus` (name_only, inode_in_use, empty_file, block_map_cleared, blocks_reused, blocks_partly_reused, likely_intact, unknown). It never reads file content, so `likely_intact` only means the recorded blocks are free now. **Deleted-file recovery** (`ExtVolume::recover_deleted_content`, `extract --deleted`, `cat --deleted`, `--inode N`): path is folder + deleted name. Uses the deleted inode's extents, or when the filesystem erased them, the newest usable older inode copy from the journal (`find_journal_copies`). Every block is checked against the block bitmap; reused blocks are zero-filled (never copied, so another file's data cannot leak into a recovery) and the result is PARTIAL/`.partial`. Live inode numbers and erased inode numbers are refused. COMPLETE only means "every recorded block was read and was free"; it does not prove the bytes are the original. **Orphan scan** (`ExtVolume::list_orphans`, `ls --orphaned`): enumerates ext-family inodes whose `dtime` marks them deleted and that no live directory entry points at anymore. This is a read-only scan with honest caveats and no claim of content recovery. Fixture generator: `python3 tools/create_deleted_fixture.py [1024|4096]` builds `testdata/deleted-fixture-<bs>.raw` (git-ignored) with intact / journal-recovered / partly-reused / lost / empty cases and prints the original SHA-256 values; expected results are tabulated in `testdata/README.md`. Verified (Linux, scratch images, not committed): byte-identical recovery vs the original files for intact maps and for journal recovery (real `debugfs jo/jw` journals, with and without checksums), correct PARTIAL when blocks were overwritten, refusals, and ~1,300 mutated images under ASan+UBSan with no crash. Not covered: htree index slack, recursion into subdirectories (resolved via recursive extraction at the CLI boundary), directory/symlink recovery, inline-data files, external journals, fast-commit areas, and real kernel-deleted images (no mount available when this was built).
+  via `ExtVolume::read_content`; inline regular files and fast symlinks stored in
+  the inode are supported, but inline directories and full symlink traversal are
+  still out of scope. Recursive directory extraction is now supported for ext-family
+  directory trees. **Deleted-name listing** (`ExtVolume::list_deleted`, `ls --deleted`): finds names left in directory slack space and entries whose inode number was zeroed; each gets a `DeletedStatus` (name_only, inode_in_use, empty_file, block_map_cleared, blocks_reused, blocks_partly_reused, likely_intact, unknown). It never reads file content, so `likely_intact` only means the recorded blocks are free now. **Deleted-file recovery** (`ExtVolume::recover_deleted_content`, `extract --deleted`, `cat --deleted`, `--inode N`): path is folder + deleted name. Uses the deleted inode's extents, or when the filesystem erased them, the newest usable older inode copy from the journal (`find_journal_copies`). Every block is checked against the block bitmap; reused blocks are zero-filled (never copied, so another file's data cannot leak into a recovery) and the result is PARTIAL/`.partial`. Live inode numbers and erased inode numbers are refused. COMPLETE only means "every recorded block was read and was free"; it does not prove the bytes are the original. **Orphan scan** (`ExtVolume::list_orphans`, `ls --orphaned`): enumerates ext-family inodes whose `dtime` marks them deleted and that no live directory entry points at anymore. This is a read-only scan with honest caveats and no claim of content recovery. Fixture generator: `python3 tools/create_deleted_fixture.py [1024|4096]` builds `testdata/deleted-fixture-<bs>.raw` (git-ignored) with intact / journal-recovered / partly-reused / lost / empty cases and prints the original SHA-256 values; expected results are tabulated in `testdata/README.md`. Verified (Linux, scratch images, not committed): byte-identical recovery vs the original files for intact maps and for journal recovery (real `debugfs jo/jw` journals, with and without checksums), correct PARTIAL when blocks were overwritten, refusals, and ~1,300 mutated images under ASan+UBSan with no crash. Not covered: htree index slack, recursion into subdirectories (resolved via recursive extraction at the CLI boundary), directory/symlink recovery, inline directories, external journals, fast-commit areas, and real kernel-deleted images (no mount available when this was built).
 - CLI: `inspect [-v] <image>` (`inspect-image` is a deprecated alias), `ls [-v] [-p N] [--deleted|--orphaned] <image> [path]`, `cat [-p N] <image> <path>`, `extract [-p N] <image> <path> <outdir>`, `demo`, `version`, `help`. Exit codes 0/1/2.
 - File access inside ext images: path lookup, directory listing, file content for extent-mapped (ext4) and block-mapped (ext2/3, incl. double/triple indirect) files, sparse holes. `ls --orphaned` adds a read-only ext-family orphan scan: it enumerates inodes whose `dtime` indicates deletion and that are not reachable from any live directory entry. `extract` writes `<name>.partial`, renames when complete, never overwrites, reports status (complete/PARTIAL/FAILED) and SHA-256 of the output bytes. Safety: 1 GiB cap on zero-filled holes per file; overlapping extents rejected; refuses to write over the source image.
 - Human-readable output (done): the core builds plain-language `ReportSection`s once
@@ -38,7 +39,10 @@ Working:
   Scanner warnings and `ls`/`cat`/`extract` output are in plain words too (human sizes,
   file/folder, Result/Size/SHA-256 lines; `ls -v` adds inodes).
 - Qt Widgets GUI: section cards, "Show technical details" toggle, Advanced step-trace view,
-  worker-thread inspection, `filerelic-gui <image>` to open an image directly.
+  worker-thread inspection, `filerelic-gui <image>` to open an image directly, and a simple
+  case-workflow panel for selecting a destination folder and exporting a versioned JSON manifest.
+- Case manifest/report layer: a shared `src/case_manifest.*` helper writes a versioned JSON manifest
+  from the `InspectionReport`, and the CLI exposes `filerelic report <image> [output.json]`.
 - Synthetic fixtures in `testdata/` (generator `tools/create_practice_image.py`)
   and generated real ext4 images (`tools/create_real_ext4_fixture.py`, git-ignored,
   Linux + e2fsprogs) checked by `tools/verify_real_ext4.py`.
@@ -98,9 +102,12 @@ builds. There is no automated test suite.
 4. **Safe extraction and provenance:** write only to a user-chosen destination,
    collision-safe names, partial/failed status, SHA-256 of output (identifies
    bytes, does not prove completeness), then a versioned JSON case manifest
-   before any PDF report.
+   before any PDF report. A minimal manifest export layer is now in place and
+   will be extended before any PDF renderer is added.
 5. **GUI and CLI workflows:** progress, cancel, candidate selection, destination,
-   report export, only when the core can supply those states.
+   report export, only when the core can supply those states. The current GUI has
+   destination selection and report export for a single inspected image; a richer
+   job-state view remains the next step.
 6. **Platform coverage:** build and package on Windows and macOS (only Linux has
    been built). Mark APFS encryption, XFS, Btrfs, snapshots, TRIM as limits.
 7. **Regenerate diagrams** from the final code. The old class-diagram drafts were
