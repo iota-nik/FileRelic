@@ -34,6 +34,13 @@ struct DeletedListingResult {
     DeletedListing listing;
 };
 
+struct OrphanListingResult {
+    bool ok = false;
+    std::string error;
+    std::uint64_t partition_number = 0;
+    OrphanListing listing;
+};
+
 struct FileReadSummary {
     ReadStatus status = ReadStatus::failed;
     std::string error;
@@ -65,6 +72,11 @@ ListingResult list_path(const std::filesystem::path& image,
 DeletedListingResult list_deleted_path(const std::filesystem::path& image,
                                        std::uint64_t partition_number,
                                        const std::string& path);
+
+// Scans ext2/3/4 metadata for inodes that have been deleted and are no longer
+// referenced by any live directory entry. This is a read-only orphan scan.
+OrphanListingResult list_orphaned_inodes(const std::filesystem::path& image,
+                                        std::uint64_t partition_number);
 
 // Recovers a DELETED file: `path` is the folder plus the deleted name (for example
 // "/docs/b.bin", see `ls --deleted`). `inode_number` picks one entry when several

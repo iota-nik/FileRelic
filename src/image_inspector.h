@@ -96,6 +96,21 @@ struct DeletedListing {
     std::vector<DeletedEntryInfo> entries;
 };
 
+// A deleted inode whose name is no longer reachable from any directory.
+struct OrphanEntryInfo {
+    std::uint32_t inode_number = 0;
+    InodeKind kind = InodeKind::unknown;
+    std::optional<std::uint64_t> size_bytes;
+    std::optional<std::uint32_t> deleted_time;  // inode dtime, seconds since 1970 (UTC)
+    std::string note;                           // why FileRelic flagged it as orphaned
+};
+
+struct OrphanListing {
+    bool attempted = false;
+    std::string limitation;                     // why the scan may be incomplete, if it is
+    std::vector<OrphanEntryInfo> entries;
+};
+
 struct FileSystemInfo {
     FileSystemKind kind = FileSystemKind::unknown;
     std::string label = "unknown";

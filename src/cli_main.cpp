@@ -83,6 +83,8 @@ void print_ls_help(std::ostream& out) {
         << "                      are still on disk. Each gets a status; none is a promise\n"
         << "                      that the file can be recovered.\n"
         << "                      To get one back: filerelic extract --deleted ...\n"
+        << "  -o, --orphaned      List ext4 inodes whose dtime says they were deleted and\n"
+        << "                      no live directory entry points at them anymore.\n"
         << "  -h, --help          Show this help\n\n"
         << "Example: filerelic ls testdata/real-ext4-1024.raw /docs\n"
         << "         filerelic ls --deleted testdata/real-ext4-1024.raw /docs\n";
@@ -178,6 +180,7 @@ struct VolumeArgs {
     bool help = false;
     bool verbose = false;
     bool deleted = false;
+    bool orphaned = false;
     std::uint32_t inode = 0;        // with --deleted: pick one entry by inode number
     std::string error;
 };
@@ -192,6 +195,8 @@ VolumeArgs parse_volume_args(const std::vector<std::string_view>& args) {
             parsed.verbose = true;
         } else if (argument == "-d" || argument == "--deleted") {
             parsed.deleted = true;
+        } else if (argument == "-o" || argument == "--orphaned") {
+            parsed.orphaned = true;
         } else if (argument == "-i" || argument == "--inode") {
             if (index + 1 >= args.size()) {
                 parsed.error = "missing number after " + std::string(argument);
@@ -296,6 +301,33 @@ int run_ls_deleted(const VolumeArgs& parsed, const std::string& path) {
     return exit_ok;
 }
 
+int run_ls_orphans(const VolumeArgs& parsed) {
+    const filerelic::OrphanListingResult result =
+        filerelic::list_orphaned_inodes(parsed.positional[0], parsed.partition);
+    if (!result.ok) {
+        std::cerr << "filerelic ls: " << result.error << '\n';
+        return exit_failed;
+    }
+    const std::size_t count = result.listing.entries.size();
+    std::cout << "orphaned ext inodes  -  " << count << (count == 1 ? " inode" : " inodes")
+              << " (partition " << result.partition_number << ")\n";
+    for (const auto& entry : result.listing.entries) {
+        std::cout << "  inode " << entry.inode_number << "  "
+                  << filerelic::describe_inode_kind(entry.kind) << "";
+        if (entry.size_bytes) std::cout << "  " << filerelic::format_size_short(*entry.size_bytes);
+        if (entry.deleted_time) {
+            std::cout << "  deleted at " << filerelic::format_unix_time_utc(*entry.deleted_time);
+        }
+        std::cout << '\n';
+        if (!entry.note.empty()) std::cout << "    " << entry.note << '\n';
+    }
+    if (!result.listing.limitation.empty()) {
+        std::cerr << "Warning: the scan may be incomplete - " << result.listing.limitation << '\n';
+        return exit_failed;
+    }
+    return exit_ok;
+}
+
 int run_ls(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_ls_help(std::cout); return exit_ok; }
@@ -304,7 +336,11 @@ int run_ls(const std::vector<std::string_view>& args) {
         return usage_error("ls", "expected <image> and an optional <path>", print_ls_help);
     }
     if (parsed.inode != 0) return usage_error("ls", "--inode only applies to cat/extract --deleted", print_ls_help);
+    if (parsed.deleted && parsed.orphaned) {
+        return usage_error("ls", "choose either --deleted or --orphaned, not both", print_ls_help);
+    }
     const std::string path = parsed.positional.size() == 2 ? parsed.positional[1] : "/";
+    if (parsed.orphaned) return run_ls_orphans(parsed);
     if (parsed.deleted) return run_ls_deleted(parsed, path);
 
     const filerelic::ListingResult result =

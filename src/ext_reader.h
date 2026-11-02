@@ -73,6 +73,10 @@ public:
     // Finds unlinked entries whose names are still in this directory's blocks.
     // Each gets an honest DeletedStatus; nothing is claimed recoverable.
     void list_deleted(const InodeInfo& directory, DeletedListing& listing);
+    // Finds inodes whose dtime indicates deletion and that no live directory entry
+    // references anymore. This is an ext-family orphan scan, not a promise that
+    // every dead file has been recovered or that no false positives remain.
+    void list_orphans(OrphanListing& listing);
     // How a deleted file's content was obtained (filled by recover_deleted_content).
     struct RecoveryDetails {
         std::string source;                      // "the deleted inode" or "an older copy ... journal"

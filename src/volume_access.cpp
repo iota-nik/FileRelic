@@ -182,6 +182,20 @@ DeletedListingResult list_deleted_path(const std::filesystem::path& image,
     return result;
 }
 
+OrphanListingResult list_orphaned_inodes(const std::filesystem::path& image,
+                                        std::uint64_t partition_number) {
+    OrphanListingResult result;
+    OpenedVolume opened = open_volume(image, partition_number);
+    if (!opened.volume) {
+        result.error = opened.error;
+        return result;
+    }
+    result.partition_number = opened.partition_number;
+    opened.volume->list_orphans(result.listing);
+    result.ok = true;
+    return result;
+}
+
 FileReadSummary read_file(const std::filesystem::path& image,
                           std::uint64_t partition_number,
                           const std::string& path,

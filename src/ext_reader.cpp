@@ -850,6 +850,78 @@ void ExtVolume::list_deleted(const InodeInfo& directory, DeletedListing& listing
     }
 }
 
+void ExtVolume::list_orphans(OrphanListing& listing) {
+    listing.attempted = true;
+    listing.entries.clear();
+    listing.limitation.clear();
+
+    std::set<std::uint32_t> live_inodes;
+    std::set<std::uint32_t> visited_dirs;
+    std::vector<std::uint32_t> stack;
+    stack.push_back(root_inode_number);
+    while (!stack.empty()) {
+        const std::uint32_t inode_number = stack.back();
+        stack.pop_back();
+        if (!visited_dirs.insert(inode_number).second) {
+            continue;
+        }
+        const InodeInfo inode = read_inode(inode_number);
+        if (!inode.read || inode.kind != InodeKind::directory) {
+            continue;
+        }
+        const std::string problem = for_each_entry(inode,
+            [&](std::uint32_t child_inode, const std::string& raw_name) {
+                if (raw_name == "." || raw_name == "..") {
+                    return true;
+                }
+                live_inodes.insert(child_inode);
+                const InodeInfo child = read_inode(child_inode);
+                if (child.read && child.kind == InodeKind::directory) {
+                    stack.push_back(child_inode);
+                }
+                return true;
+            });
+        if (!problem.empty()) {
+            listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                + "live-directory scan was incomplete: " + problem;
+        }
+    }
+
+    for (std::uint32_t inode_number = 1; inode_number <= geometry_.inodes_count; ++inode_number) {
+        RawInode raw;
+        if (!read_raw_inode(inode_number, raw)) {
+            continue;
+        }
+        if (raw.dtime == 0) {
+            continue;
+        }
+        if (live_inodes.count(inode_number) != 0) {
+            continue;
+        }
+
+        const InodeInfo inode = read_inode(inode_number);
+        if (!inode.read || inode.kind == InodeKind::unknown || inode.kind == InodeKind::other) {
+            continue;
+        }
+        if (listing.entries.size() >= max_listing_entries) {
+            listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                + "orphan listing truncated after " + std::to_string(max_listing_entries) + " entries";
+            break;
+        }
+
+        OrphanEntryInfo entry;
+        entry.inode_number = inode_number;
+        entry.kind = inode.kind;
+        entry.size_bytes = inode.size_bytes;
+        entry.deleted_time = raw.dtime;
+        entry.note = "no live directory entry points at this inode anymore";
+        if (!inode.limitation.empty()) {
+            entry.note += "; " + inode.limitation;
+        }
+        listing.entries.push_back(std::move(entry));
+    }
+}
+
 // ----------------------------------------------------------- journal ------
 
 namespace {
