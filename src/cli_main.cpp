@@ -10,12 +10,14 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "image_inspector.h"
+#include "report_format.h"
 #include "volume_access.h"
 
 #ifdef _WIN32
@@ -71,7 +73,7 @@ void print_demo_help(std::ostream& out) {
 
 
 void print_ls_help(std::ostream& out) {
-    out << "Usage: filerelic ls [--partition N] <image> [path]\n\n"
+    out << "Usage: filerelic ls [-v] [--partition N] <image> [path]\n\n"
         << "Lists a directory inside an ext2/3/4 image (default path: /), or describes\n"
         << "one file. Nothing is mounted or modified.\n\n"
         << "Options:\n"
@@ -157,6 +159,7 @@ struct VolumeArgs {
     std::vector<std::string> positional;
     std::uint64_t partition = 0;
     bool help = false;
+    bool verbose = false;
     std::string error;
 };
 
@@ -166,6 +169,8 @@ VolumeArgs parse_volume_args(const std::vector<std::string_view>& args) {
         const std::string_view argument = args[index];
         if (argument == "-h" || argument == "--help") {
             parsed.help = true;
+        } else if (argument == "-v" || argument == "--verbose") {
+            parsed.verbose = true;
         } else if (argument == "-p" || argument == "--partition") {
             if (index + 1 >= args.size()) {
                 parsed.error = "missing number after " + std::string(argument);
@@ -196,29 +201,18 @@ int usage_error(const std::string& command, const std::string& message,
     return exit_usage;
 }
 
-const char* kind_letter(filerelic::InodeKind kind) {
-    switch (kind) {
-    case filerelic::InodeKind::directory: return "d";
-    case filerelic::InodeKind::regular_file: return "-";
-    case filerelic::InodeKind::symbolic_link: return "l";
-    default: return "?";
-    }
-}
-
-void print_entry_line(const filerelic::DirectoryEntryInfo& entry) {
+void print_entry_line(const filerelic::DirectoryEntryInfo& entry, bool verbose) {
     const filerelic::InodeInfo& inode = entry.inode;
-    std::cout << kind_letter(inode.kind) << ' ';
-    if (inode.size_bytes) {
-        std::cout << std::setw(12) << *inode.size_bytes;
-    } else {
-        std::cout << std::setw(12) << '?';
-    }
-    std::cout << "  " << entry.name << (inode.kind == filerelic::InodeKind::directory ? "/" : "")
-              << "  (inode " << entry.inode_number << ")";
-    if (!inode.limitation.empty()) {
-        std::cout << "  [" << inode.limitation << "]";
-    }
-    std::cout << '\n';
+    const bool folder = inode.kind == filerelic::InodeKind::directory;
+    std::ostringstream line;
+    line << "  " << std::left << std::setw(7) << filerelic::describe_inode_kind(inode.kind) << ' '
+         << std::right << std::setw(11)
+         << (folder ? std::string("-")
+                    : inode.size_bytes ? filerelic::format_size_short(*inode.size_bytes) : "unknown")
+         << "   " << entry.name << (folder ? "/" : "");
+    if (verbose) line << "   (inode " << entry.inode_number << ")";
+    if (!inode.limitation.empty()) line << "   [" << inode.limitation << "]";
+    std::cout << line.str() << '\n';
 }
 
 int run_ls(const std::vector<std::string_view>& args) {
@@ -236,30 +230,43 @@ int run_ls(const std::vector<std::string_view>& args) {
         std::cerr << "filerelic ls: " << result.error << '\n';
         return exit_failed;
     }
-    std::cout << result.path << "  (partition " << result.partition_number << ")\n";
     if (result.kind == filerelic::InodeKind::directory) {
+        std::size_t shown = 0;
+        for (const auto& entry : result.listing.entries) {
+            if (entry.name != "." && entry.name != "..") ++shown;
+        }
+        std::cout << result.path << "  -  " << shown << (shown == 1 ? " item" : " items")
+                  << " (partition " << result.partition_number << ")\n";
         for (const auto& entry : result.listing.entries) {
             if (entry.name == "." || entry.name == "..") continue;
-            print_entry_line(entry);
+            print_entry_line(entry, parsed.verbose);
         }
         if (!result.listing.limitation.empty()) {
-            std::cerr << "warning: " << result.listing.limitation << '\n';
+            std::cerr << "Warning: the listing is incomplete - " << result.listing.limitation << '\n';
             return exit_failed;
         }
     } else {
-        print_entry_line(result.entry);
+        std::cout << result.path << "  (partition " << result.partition_number << ")\n";
+        print_entry_line(result.entry, parsed.verbose);
     }
     return exit_ok;
 }
 
 void print_read_summary(const filerelic::FileReadSummary& summary, std::ostream& out) {
-    const char* status = summary.status == filerelic::ReadStatus::complete ? "complete"
-        : summary.status == filerelic::ReadStatus::partial ? "PARTIAL" : "FAILED";
-    out << "Status: " << status << "\n"
-        << "Bytes: " << summary.bytes_delivered << " of " << summary.expected_size << '\n'
-        << "SHA-256 (of the output bytes): " << summary.sha256_hex << '\n';
-    for (const std::string& note : summary.notes) out << "Note: " << note << '\n';
-    if (!summary.error.empty()) out << "Problem: " << summary.error << '\n';
+    using filerelic::ReadStatus;
+    switch (summary.status) {
+    case ReadStatus::complete:
+        out << "Result:   Complete - the whole file was read.\n"; break;
+    case ReadStatus::partial:
+        out << "Result:   PARTIAL - only part of the file could be read; treat it as damaged.\n"; break;
+    default:
+        out << "Result:   FAILED - the file could not be read.\n"; break;
+    }
+    out << "Size:     " << filerelic::format_size_short(summary.bytes_delivered) << " read of "
+        << filerelic::format_size_short(summary.expected_size) << " expected\n"
+        << "SHA-256:  " << summary.sha256_hex << "  (fingerprint of the bytes that were output)\n";
+    for (const std::string& note : summary.notes) out << "Note:     " << note << '\n';
+    if (!summary.error.empty()) out << "Problem:  " << summary.error << '\n';
 }
 
 int run_cat(const std::vector<std::string_view>& args) {
@@ -300,12 +307,12 @@ int run_extract(const std::vector<std::string_view>& args) {
         std::cerr << "filerelic extract: " << result.read.error << '\n';
         return exit_failed;
     }
-    std::cout << "Extracted: " << parsed.positional[1] << " (partition "
-              << result.read.partition_number << ")\n"
-              << "Output: " << result.output_path.string() << '\n';
+    std::cout << "Extracted " << parsed.positional[1] << " from partition "
+              << result.read.partition_number << "\n"
+              << "Saved to: " << result.output_path.string() << '\n';
     print_read_summary(result.read, std::cout);
-    std::cout << "Remember: the hash identifies the output bytes; it does not prove the file\n"
-              << "was recovered completely or matches the original.\n";
+    std::cout << "\nNote: the SHA-256 fingerprint describes the saved bytes only. It cannot prove\n"
+              << "the file matches what the original owner had.\n";
     return result.read.status == filerelic::ReadStatus::complete ? exit_ok : exit_failed;
 }
 

@@ -13,6 +13,9 @@ add_library(filerelic_core STATIC
     src/ext_reader.cpp
     src/filesystem_probe.cpp
     src/partition_scanner.cpp
+    src/report_format.cpp
+    src/report_sections.cpp
+    src/report_text.cpp
     src/image_inspector.cpp
     src/volume_access.cpp
 )

@@ -115,6 +115,7 @@ std::unique_ptr<ExtVolume> ExtVolume::open(ReadOnlySource& source,
     const std::uint16_t state = le16(superblock + 58);
     // Revision 0 filesystems always use 128-byte inodes; the field is valid from revision 1.
     const std::uint16_t inode_size = revision == 0 ? 128 : le16(superblock + 88);
+    const std::uint32_t compatible_features = le32(superblock + 92);
     const std::uint32_t incompatible_features = le32(superblock + 96);
 
     Geometry geometry;
@@ -141,9 +142,14 @@ std::unique_ptr<ExtVolume> ExtVolume::open(ReadOnlySource& source,
         if (!features.empty()) features += ", ";
         features += name;
     };
-    if ((incompatible_features & 0x40U) != 0) add_feature("extents");
+    const bool has_extents = (incompatible_features & 0x40U) != 0;
+    const bool has_journal = (compatible_features & 0x4U) != 0;
+    if (has_extents) add_feature("extents");
     if (geometry.is_64bit) add_feature("64-bit");
+    if (has_journal) add_feature("journal");
     info.features = features;
+    // ext2, ext3 and ext4 share one on-disk family; their feature flags tell them apart.
+    info.variant = has_extents ? "ext4" : has_journal ? "ext3" : "ext2";
 
     if (trace) {
         std::ostringstream line;

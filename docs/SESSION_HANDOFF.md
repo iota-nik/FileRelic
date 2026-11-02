@@ -29,10 +29,15 @@ Working:
   (1 KiB and 4 KiB blocks): 135 entries each, 0 mismatches. Content is read
   via `ExtVolume::read_content`; deleted entries, inline-data files, symlink
   targets, and directory extraction are not supported.
-- CLI: `inspect [-v] <image>` (`inspect-image` is a deprecated alias), `ls [-p N] <image> [path]`, `cat [-p N] <image> <path>`, `extract [-p N] <image> <path> <outdir>`, `demo`, `version`, `help`. Exit codes 0/1/2.
+- CLI: `inspect [-v] <image>` (`inspect-image` is a deprecated alias), `ls [-v] [-p N] <image> [path]`, `cat [-p N] <image> <path>`, `extract [-p N] <image> <path> <outdir>`, `demo`, `version`, `help`. Exit codes 0/1/2.
 - File access inside ext images: path lookup, directory listing, file content for extent-mapped (ext4) and block-mapped (ext2/3, incl. double/triple indirect) files, sparse holes. `extract` writes `<name>.partial`, renames when complete, never overwrites, reports status (complete/PARTIAL/FAILED) and SHA-256 of the output bytes. Safety: 1 GiB cap on zero-filled holes per file; overlapping extents rejected; refuses to write over the source image.
-- Qt Widgets GUI: result cards from the typed report, Advanced step-trace view,
-  inspection on a worker thread.
+- Human-readable output (done): the core builds plain-language `ReportSection`s once
+  (`report_format`, `report_sections`); the CLI prints them (`report_text.cpp`), the GUI
+  draws them as severity-coloured cards. Technical rows hidden unless `-v` / GUI checkbox.
+  Scanner warnings and `ls`/`cat`/`extract` output are in plain words too (human sizes,
+  file/folder, Result/Size/SHA-256 lines; `ls -v` adds inodes).
+- Qt Widgets GUI: section cards, "Show technical details" toggle, Advanced step-trace view,
+  worker-thread inspection, `filerelic-gui <image>` to open an image directly.
 - Synthetic fixtures in `testdata/` (generator `tools/create_practice_image.py`)
   and generated real ext4 images (`tools/create_real_ext4_fixture.py`, git-ignored,
   Linux + e2fsprogs) checked by `tools/verify_real_ext4.py`.
@@ -41,8 +46,11 @@ Working:
 
 - `src/image_inspector.h`: public model (`InspectionReport`, `PartitionInfo`,
   `FileSystemInfo`, `DirectoryListing`, `DirectoryEntryInfo`, `InodeInfo`,
-  `ExtentInfo`, `ReportSection`), `inspect_image()`, `render_report()`, `render_trace()`.
-- `src/image_inspector.cpp`: runs the scan, builds report sections, renders CLI text.
+  `ExtentInfo`, `ReportSection`, `ReportRow`, `Severity`), `inspect_image()`, `render_report()`, `render_trace()`.
+- `src/image_inspector.cpp`: runs the scan, then calls `build_sections`.
+- `src/report_format.*`: shared plain-language wording helpers (sizes, type names).
+- `src/report_sections.*`: builds the `ReportSection`s (the single source of wording).
+- `src/report_text.cpp`: draws sections as CLI text.
 - `src/image_source.*`: `ReadOnlySource` and `FileImageSource`. Bounds/overflow
   checked, 16 MiB per-read cap, no write method. All reads go through it.
 - `src/partition_scanner.*`: MBR / EBR / GPT.
@@ -68,13 +76,13 @@ python3 tools/create_real_ext4_fixture.py 1024
 python3 tools/verify_real_ext4.py build/filerelic testdata/real-ext4-1024.raw
 ```
 
-Content verification: `python3 tools/verify_ext_content.py build/filerelic` (273 checks vs ground truth, `debugfs dump` and sha256) after generating the real ext4/ext2 fixtures; fuzz of ls/cat/extract under ASan+UBSan (1,134 runs, no crash or timeout).
+Content verification: `python3 tools/verify_ext_content.py build/filerelic` (273 checks vs ground truth, `debugfs dump` and sha256) after generating the real ext4/ext2 fixtures; fuzz of inspect/ls/cat/extract under ASan+UBSan (600 further runs after the wording refactor, plus 1,134 earlier; no crash or timeout).
 
 Verified when this was written (Linux only): clean `-Wall -Wextra` build; CLI
 summaries identical to the pre-refactor version for all ten practice fixtures
 except the intended logical-partition renaming and ext root-directory block;
-~1,450 truncated/mutated images under ASan+UBSan without a crash; GUI builds
-and launches headless. **Not verified:** clicking through the GUI, Windows/macOS
+~1,450 truncated/mutated images under ASan+UBSan without a crash; GUI builds,
+launches headless and was screenshotted offscreen (ext4 and out-of-bounds MBR images). **Not verified:** clicking through the GUI (toggle), Windows/macOS
 builds. There is no automated test suite.
 
 ## Recommended next sequence

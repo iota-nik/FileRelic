@@ -17,6 +17,7 @@
 namespace filerelic {
 
 enum class ReportSectionKind {
+    summary,
     image,
     partition_layout,
     partition,
@@ -67,6 +68,7 @@ struct DirectoryListing {
 struct FileSystemInfo {
     FileSystemKind kind = FileSystemKind::unknown;
     std::string label = "unknown";
+    std::string variant;                        // e.g. "ext4" (ext2/ext3/ext4 are told apart by features)
     bool signature_found = false;
     std::string volume_label;
     std::string uuid;
@@ -95,11 +97,28 @@ struct PartitionInfo {
     std::vector<std::string> warnings;
 };
 
+// How a section should be styled: a calm default, a positive result, something
+// the user should look at, or something that went wrong.
+enum class Severity { info, good, warning, problem };
+
+// One "label: value" line of a section, already worded for humans.
+struct ReportRow {
+    std::string label;
+    std::string value;
+    bool technical = false;      // low-level detail (sector numbers, inode numbers, ...): shown on request
+    std::string detail;          // extra technical text appended to the value when details are shown
+};
+
+// A block of the human-readable report. The core builds these ONCE from the typed
+// results; the CLI prints them as text and the GUI draws them as cards. Neither
+// interface re-words or re-parses anything.
 struct ReportSection {
     ReportSectionKind kind = ReportSectionKind::diagnostic;
+    Severity severity = Severity::info;
     std::string title;
-    std::string details;
-    bool has_warning = false;
+    std::string summary;                        // one plain-English sentence (may be empty)
+    std::vector<ReportRow> rows;
+    std::vector<std::string> notes;             // bullet-point remarks
 };
 
 struct InspectionReport {
@@ -124,10 +143,11 @@ struct InspectionReport {
 // Opens an image read-only and returns its inspection result without choosing a UI.
 InspectionReport inspect_image(const std::filesystem::path& image_path);
 
-// Writes the human-readable summary built from the typed fields.
-// With include_trace the scanner's step log is appended.
+// Prints the human-readable report (the `sections`) as text. With `verbose`,
+// technical rows (sector numbers, inode numbers, ...) and the scanner's step log
+// are included too.
 void render_report(const InspectionReport& report, std::ostream& output,
-                   bool include_trace = false);
+                   bool verbose = false);
 
 // The scanner's step log as one block of text (used by the GUI Advanced view).
 std::string render_trace(const InspectionReport& report);

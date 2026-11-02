@@ -2,7 +2,9 @@
 
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QCheckBox>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
@@ -41,6 +43,7 @@ MainWindow::MainWindow(QWidget* parent)
       analyzeButton_(new QPushButton("Analyze image", this)),
       rawLog_(new QPlainTextEdit(this)),
       rawLogToggle_(new QToolButton(this)),
+      detailsToggle_(new QCheckBox("Show technical details (sector numbers, IDs, features)", this)),
       resultsContainer_(new QWidget(this)),
       resultsLayout_(new QVBoxLayout(resultsContainer_)),
       inspectionWatcher_(new QFutureWatcher<filerelic::InspectionReport>(this)) {
@@ -116,6 +119,8 @@ MainWindow::MainWindow(QWidget* parent)
     auto* reportLabel = new QLabel("INSPECTION RESULTS", reportCard);
     reportLabel->setObjectName("sectionLabel");
     reportLayout->addWidget(reportLabel);
+    detailsToggle_->setObjectName("detailsToggle");
+    reportLayout->addWidget(detailsToggle_);
     reportLayout->addWidget(resultsScroll, 1);
     reportLayout->addWidget(rawLogToggle_);
     reportLayout->addWidget(rawLog_);
@@ -149,6 +154,12 @@ MainWindow::MainWindow(QWidget* parent)
         QFrame#resultCard[tone="warning"] { background: #2b2113; border-color: #b47b2f; }
         QFrame#resultCard[tone="success"] QLabel#resultTitle { color: #a9edcc; }
         QFrame#resultCard[tone="warning"] QLabel#resultTitle { color: #ffd18a; }
+        QFrame#resultCard[tone="problem"] { background: #2d1417; border-color: #c04b55; }
+        QFrame#resultCard[tone="problem"] QLabel#resultTitle { color: #ffb3b9; }
+        QLabel#rowLabel { color: #8fa3b8; font-size: 13px; }
+        QLabel#rowValue { color: #e3ecf5; font-size: 14px; }
+        QLabel#rowTech { color: #7f93a8; font-size: 12px; }
+        QCheckBox#detailsToggle { color: #a8c9e9; font-size: 13px; }
         QLabel#resultTitle { color: #edf5fc; font-size: 16px; font-weight: 700; }
         QLabel#resultContent { color: #c4d1df; font-size: 14px; line-height: 1.35; }
         QToolButton#rawLogToggle { color: #a8c9e9; border: none; font-size: 13px;
@@ -162,6 +173,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(inspectionWatcher_, &QFutureWatcher<filerelic::InspectionReport>::finished,
             this, &MainWindow::inspectionFinished);
     connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
+    connect(detailsToggle_, &QCheckBox::toggled, this, &MainWindow::toggleDetails);
 
     addResultCard("Ready to inspect", "Choose a disk image, then select Analyze image.\n"
                   "You will see the image, partition layout, filesystem findings, and any warnings here.");
@@ -197,6 +209,7 @@ void MainWindow::inspectImage(const QString& imagePath) {
     rawReport_.clear();
     rawLog_->clear();
     rawLogToggle_->setChecked(false);
+    haveReport_ = false;
     clearResults();
     addResultCard("Inspection in progress", "Reading the selected image in read-only mode.");
     const std::filesystem::path nativePath =
@@ -211,20 +224,33 @@ void MainWindow::inspectImage(const QString& imagePath) {
 }
 
 void MainWindow::inspectionFinished() {
-    const filerelic::InspectionReport report = inspectionWatcher_->result();
+    report_ = inspectionWatcher_->result();
+    haveReport_ = true;
+    const filerelic::InspectionReport& report = report_;
     // The Advanced log is the scanner's step trace; all results shown in the
     // cards come from the typed report fields, not from this text.
     rawReport_ = QString::fromStdString(filerelic::render_trace(report));
     rawLog_->setPlainText(rawReport_);
     chooseButton_->setEnabled(true);
     analyzeButton_->setEnabled(!selectedImagePath_.isEmpty());
-    if (report.succeeded()) {
-        status_->setText("Inspection complete — no image data was modified.");
-        renderResults(report);
-    } else {
-        status_->setText("Inspection failed; see the report for details.");
-        renderResults(report);
+    status_->setText(report.succeeded()
+                         ? "Inspection complete — no image data was modified."
+                         : "Inspection failed; see the report for details.");
+    renderResults(report);
+}
+
+void MainWindow::toggleDetails(bool) {
+    if (haveReport_) {
+        renderResults(report_);
     }
+}
+
+void MainWindow::loadImage(const QString& imagePath) {
+    const QFileInfo info(imagePath);
+    selectedImagePath_ = imagePath;
+    imageDetails_->setText(info.fileName() + "  •  " + formatSize(info.size()));
+    analyzeButton_->setEnabled(true);
+    inspectImage(imagePath);
 }
 
 void MainWindow::toggleRawLog(bool visible) {
@@ -261,26 +287,71 @@ void MainWindow::addResultCard(const QString& title, const QString& content, con
     resultsLayout_->insertWidget(resultsLayout_->count(), card);
 }
 
+void MainWindow::addSectionCard(const filerelic::ReportSection& section) {
+    using filerelic::Severity;
+    const bool technical = detailsToggle_->isChecked();
+    QString tone;
+    switch (section.severity) {
+        case Severity::good:    tone = QStringLiteral("success"); break;
+        case Severity::warning: tone = QStringLiteral("warning"); break;
+        case Severity::problem: tone = QStringLiteral("problem"); break;
+        case Severity::info:    break;
+    }
+    auto* card = new QFrame(resultsContainer_);
+    card->setObjectName("resultCard");
+    if (!tone.isEmpty()) card->setProperty("tone", tone);
+    auto* layout = new QVBoxLayout(card);
+    layout->setContentsMargins(14, 12, 14, 12);
+    layout->setSpacing(6);
+
+    auto* heading = new QLabel(QString::fromStdString(section.title), card);
+    heading->setObjectName("resultTitle");
+    heading->setWordWrap(true);
+    layout->addWidget(heading);
+
+    const auto makeText = [card](const QString& text, const char* name) {
+        auto* label = new QLabel(text, card);
+        label->setObjectName(name);
+        label->setWordWrap(true);
+        label->setTextFormat(Qt::PlainText);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        return label;
+    };
+
+    if (!section.summary.empty()) {
+        layout->addWidget(makeText(QString::fromStdString(section.summary), "resultContent"));
+    }
+
+    auto* grid = new QGridLayout();
+    grid->setHorizontalSpacing(14);
+    grid->setVerticalSpacing(4);
+    grid->setColumnStretch(1, 1);
+    int row = 0;
+    for (const filerelic::ReportRow& item : section.rows) {
+        if (item.technical && !technical) continue;
+        QString value = QString::fromStdString(item.value);
+        auto* label = makeText(QString::fromStdString(item.label), "rowLabel");
+        label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        grid->addWidget(label, row, 0, Qt::AlignTop);
+        grid->addWidget(makeText(value, "rowValue"), row, 1);
+        ++row;
+        if (technical && !item.detail.empty()) {
+            grid->addWidget(makeText(QString::fromStdString(item.detail), "rowTech"), row, 1);
+            ++row;
+        }
+    }
+    if (row > 0) layout->addLayout(grid);
+
+    for (const std::string& note : section.notes) {
+        layout->addWidget(makeText(QString::fromUtf8("•  ") + QString::fromStdString(note), "resultContent"));
+    }
+    resultsLayout_->addWidget(card);
+}
+
 void MainWindow::renderResults(const filerelic::InspectionReport& report) {
     clearResults();
-    const bool succeeded = report.succeeded();
-    addResultCard(succeeded ? "Inspection complete" : "Inspection needs attention",
-                  succeeded ? "Image was inspected read-only. No image data was modified."
-                            : "FileRelic could not complete this inspection. Review the report or raw diagnostic log.",
-                  succeeded ? "success" : "warning");
-
     for (const auto& section : report.sections) {
-        const QString title = QString::fromStdString(section.title);
-        const QString details = QString::fromStdString(section.details);
-        QString tone;
-        if (section.has_warning
-            || section.kind == filerelic::ReportSectionKind::warnings
-            || section.kind == filerelic::ReportSectionKind::diagnostic) {
-            tone = QStringLiteral("warning");
-        } else if (section.kind == filerelic::ReportSectionKind::partition_layout && succeeded) {
-            tone = QStringLiteral("success");
-        }
-        addResultCard(title, details, tone);
+        addSectionCard(section);
     }
     resultsLayout_->addStretch();
 }

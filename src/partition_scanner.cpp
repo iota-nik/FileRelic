@@ -167,7 +167,7 @@ void scan_gpt(ScanContext& context) {
     if (!read_gpt_header(source, 1, primary, error)) {
         context.trace("  GPT: primary header invalid; " + error);
         report.partition_table_state = ValidationState::invalid;
-        report.warnings.push_back("GPT primary header invalid: " + error);
+        report.warnings.push_back("The GPT header is damaged or unreadable: " + error + ".");
         return;
     }
 
@@ -176,27 +176,27 @@ void scan_gpt(ScanContext& context) {
     bool has_warning = false;
     const auto warn = [&](const std::string& message) {
         context.trace("  GPT warning: " + message);
-        report.warnings.push_back("GPT " + message);
+        report.warnings.push_back(message);
         has_warning = true;
     };
 
     if (primary.current_lba != 1 || primary.backup_lba >= total_sectors
         || primary.first_usable_lba > primary.last_usable_lba) {
-        warn("primary header has inconsistent locations or usable range");
+        warn("The primary GPT header has inconsistent locations or usable range.");
     }
 
     GptHeader backup{};
     if (!read_gpt_header(source, primary.backup_lba, backup, error)) {
-        warn("backup header invalid: " + error);
+        warn("The backup GPT header at the end of the disk is damaged: " + error + ".");
     } else if (backup.current_lba != primary.backup_lba || backup.backup_lba != 1) {
-        warn("backup header does not point back to primary header");
+        warn("The backup GPT header does not point back to the primary one.");
     } else {
         context.trace("  GPT: backup header valid (CRC32 checked)");
     }
 
     if (primary.partition_entry_count == 0 || primary.partition_entry_count > maximum_partition_entries
         || primary.partition_entry_size < 128 || primary.partition_entry_size > 4096) {
-        warn("partition-entry count or size is unsupported");
+        warn("The GPT partition list has an unsupported size or count.");
         report.partition_table_state = ValidationState::warning;
         return;
     }
@@ -205,7 +205,7 @@ void scan_gpt(ScanContext& context) {
         static_cast<std::uint64_t>(primary.partition_entry_count) * primary.partition_entry_size;
     if (primary.partition_entries_lba > std::numeric_limits<std::uint64_t>::max() / sector_size
         || !range_fits(source.size(), primary.partition_entries_lba * sector_size, entries_length)) {
-        warn("partition-entry array extends beyond image boundary");
+        warn("The GPT partition list extends past the end of the image.");
         report.partition_table_state = ValidationState::invalid;
         return;
     }
@@ -213,13 +213,13 @@ void scan_gpt(ScanContext& context) {
     const ReadResult entries_read =
         source.read(primary.partition_entries_lba * sector_size, entries_length);
     if (!entries_read.ok()) {
-        warn("could not read complete partition-entry array");
+        warn("The GPT partition list could not be read completely.");
         report.partition_table_state = ValidationState::invalid;
         return;
     }
     const std::vector<std::uint8_t>& entries = entries_read.bytes;
     if (bytes::crc32_ieee(entries.data(), entries.size()) != primary.partition_entries_crc32) {
-        warn("partition-entry array CRC32 does not match");
+        warn("The GPT partition list fails its checksum, so it may be corrupted.");
         report.partition_table_state = ValidationState::invalid;
         return;
     }
@@ -265,9 +265,9 @@ void scan_gpt(ScanContext& context) {
                       + "): sectors " + std::to_string(start_lba) + " to " + std::to_string(end_lba));
         if (!range_is_valid) {
             context.trace("    Status: invalid partition range");
-            partition.warnings.push_back("Partition range is invalid");
-            report.warnings.push_back("GPT partition " + std::to_string(index + 1)
-                                      + " has an invalid range");
+            partition.warnings.push_back("The partition range is invalid.");
+            report.warnings.push_back("Partition " + std::to_string(index + 1)
+                                      + " has an invalid range (outside the usable area of the disk).");
             report.partitions.push_back(std::move(partition));
             has_warning = true;
             continue;
@@ -283,7 +283,7 @@ void scan_gpt(ScanContext& context) {
             const Range& first = partition_ranges[left];
             const Range& second = partition_ranges[right];
             if (first.start_lba <= second.end_lba && second.start_lba <= first.end_lba) {
-                warn("valid partition ranges overlap");
+                warn("Two GPT partitions overlap.");
             }
         }
     }
@@ -320,7 +320,7 @@ void scan_extended_partition(ScanContext& context,
     for (std::size_t record = 0; record < maximum_ebr_records; ++record) {
         if (std::find(visited_ebr_sectors.begin(), visited_ebr_sectors.end(), current_ebr_sector)
             != visited_ebr_sectors.end()) {
-            record_warning("EBR chain contains a loop at sector " + std::to_string(current_ebr_sector));
+            record_warning("The chain of logical partitions loops back on itself (sector " + std::to_string(current_ebr_sector) + ").");
             return;
         }
         visited_ebr_sectors.push_back(current_ebr_sector);
@@ -329,28 +329,28 @@ void scan_extended_partition(ScanContext& context,
         if (!range_fits(source.size(), ebr_start_byte, sector_size)
             || ebr_start_byte < extended_start_byte
             || ebr_start_byte + sector_size > extended_end_byte) {
-            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
-                           + " lies outside the extended partition");
+            record_warning("A logical-partition record (sector " + std::to_string(current_ebr_sector)
+                           + ") lies outside its extended partition.");
             return;
         }
 
         const ReadResult ebr_read = read_sector(source, current_ebr_sector);
         if (!ebr_read.ok()) {
-            record_warning("Could not read EBR at sector " + std::to_string(current_ebr_sector));
+            record_warning("Could not read a logical-partition record at sector " + std::to_string(current_ebr_sector) + ".");
             return;
         }
         const std::vector<std::uint8_t>& ebr = ebr_read.bytes;
         if (ebr[510] != 0x55 || ebr[511] != 0xaa) {
-            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
-                           + " has no 55 aa signature");
+            record_warning("A logical-partition record (sector " + std::to_string(current_ebr_sector)
+                           + ") has no valid signature.");
             return;
         }
 
         const MbrEntry logical_entry = read_partition_entry(ebr, 0);
         const MbrEntry next_ebr_entry = read_partition_entry(ebr, 1);
         if (logical_entry.type == 0 || logical_entry.sector_count == 0) {
-            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
-                           + " has no valid logical-partition entry");
+            record_warning("A logical-partition record (sector " + std::to_string(current_ebr_sector)
+                           + ") does not describe a partition.");
             return;
         }
 
@@ -376,10 +376,10 @@ void scan_extended_partition(ScanContext& context,
 
         if (!logical_range_is_valid) {
             context.trace("    Status: invalid; extends beyond extended-partition boundary");
-            partition.warnings.push_back("Logical partition exceeds the extended-partition boundary");
+            partition.warnings.push_back("It extends past the edge of its extended partition.");
             report.partitions.push_back(std::move(partition));
-            report.warnings.push_back("Logical MBR partition " + std::to_string(logical_number)
-                                      + " exceeds the extended-partition boundary");
+            report.warnings.push_back("Logical partition " + std::to_string(logical_number)
+                                      + " extends past the edge of its extended partition.");
             report.partition_table_state = ValidationState::warning;
             return;
         }
@@ -391,16 +391,16 @@ void scan_extended_partition(ScanContext& context,
             return;
         }
         if (!is_extended_partition(next_ebr_entry.type) || next_ebr_entry.sector_count == 0) {
-            record_warning("EBR at sector " + std::to_string(current_ebr_sector)
-                           + " has an invalid next-EBR entry");
+            record_warning("A logical-partition record (sector " + std::to_string(current_ebr_sector)
+                           + ") points to an invalid next record.");
             return;
         }
         current_ebr_sector = static_cast<std::uint64_t>(extended_start_sector)
             + next_ebr_entry.start_sector;
     }
 
-    record_warning("EBR chain exceeded the safe limit of " + std::to_string(maximum_ebr_records)
-                   + " records");
+    record_warning("The chain of logical partitions is longer than the safety limit of "
+                   + std::to_string(maximum_ebr_records) + " records; the rest was ignored.");
 }
 
 } // namespace
@@ -413,21 +413,21 @@ void scan_partitions(ScanContext& context) {
 
     if (source.size() < sector_size) {
         context.trace("MBR: image is smaller than one sector; not present");
-        report.diagnostics.push_back("Image is smaller than one sector; no MBR can be present");
+        report.diagnostics.push_back("The image is smaller than one 512-byte sector, so it cannot hold a partition table.");
         return;
     }
 
     const ReadResult first = read_sector(source, 0);
     if (!first.ok()) {
         context.trace("MBR: could not read the first sector");
-        report.diagnostics.push_back("Could not read the image's first sector");
+        report.diagnostics.push_back("The first sector of the image could not be read.");
         return;
     }
     const std::vector<std::uint8_t>& first_sector = first.bytes;
 
     if (first_sector[510] != 0x55 || first_sector[511] != 0xaa) {
         context.trace("MBR: signature not found");
-        report.diagnostics.push_back("No MBR signature found at byte offsets 510–511");
+        report.diagnostics.push_back("No MBR signature (55 AA) at the end of the first sector, so this does not look like an MBR-partitioned disk.");
         return;
     }
 
@@ -453,8 +453,8 @@ void scan_partitions(ScanContext& context) {
         if (entry.type == 0 || entry.sector_count == 0) {
             context.trace("Partition " + std::to_string(index + 1)
                           + ": malformed entry (type and length must both be non-zero)");
-            report.warnings.push_back("MBR partition entry " + std::to_string(index + 1)
-                                      + " has only one of type or length set");
+            report.warnings.push_back("Partition entry " + std::to_string(index + 1)
+                                      + " is incomplete: it has a type or a size, but not both.");
             has_invalid_entry = true;
             continue;
         }
@@ -477,8 +477,9 @@ void scan_partitions(ScanContext& context) {
             if (first_slot.start_byte < second_end && second_slot.start_byte < first_end) {
                 context.trace("Warning: partitions " + std::to_string(first_slot.number) + " and "
                               + std::to_string(second_slot.number) + " overlap");
-                report.warnings.push_back("MBR partitions " + std::to_string(first_slot.number)
-                                          + " and " + std::to_string(second_slot.number) + " overlap");
+                report.warnings.push_back("Partitions " + std::to_string(first_slot.number) + " and "
+                                          + std::to_string(second_slot.number)
+                                          + " overlap: they claim some of the same space.");
                 has_overlap = true;
             }
         }
@@ -487,7 +488,7 @@ void scan_partitions(ScanContext& context) {
     if (slots.empty()) {
         context.trace("MBR: signature found, but no populated primary entries");
         report.partition_table_state = ValidationState::warning;
-        report.warnings.push_back("MBR signature exists, but no primary partition entries are populated");
+        report.warnings.push_back("The image has an MBR signature, but no partitions are defined in it.");
         return;
     }
 
@@ -502,10 +503,10 @@ void scan_partitions(ScanContext& context) {
 
         if (!slot.range_is_valid) {
             context.trace("  Status: invalid; extends beyond image boundary");
-            partition.warnings.push_back("Partition extends beyond image boundary");
+            partition.warnings.push_back("It extends beyond the end of the image.");
             report.partitions.push_back(std::move(partition));
-            report.warnings.push_back("MBR partition " + std::to_string(slot.number)
-                                      + " extends beyond image boundary");
+            report.warnings.push_back("Partition " + std::to_string(slot.number)
+                                      + " claims space beyond the end of the image: the image may be truncated or the table damaged.");
             has_invalid_entry = true;
             continue;
         }
