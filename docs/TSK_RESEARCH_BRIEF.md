@@ -23,4 +23,4 @@ Questions to answer:
 6. **Independent check.** Which second tool can cross-check TSK's results
    (e.g. `debugfs` for ext4, `ntfsinfo`/`ntfscat`)?
 
-Deliverable format: a markdown file in `docs/` named `TSK_FINDINGS.md`.
+Deliverable format: a markdown file in `docs/` named `TSK_FINDINGS.md` (see the completed findings in `docs/TSK_FINDINGS.md`).

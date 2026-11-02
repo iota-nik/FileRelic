@@ -56,3 +56,7 @@ public:
 - Does the ext reader become a "builtin" adapter, or stay a teaching fixture reader?
 - Callback vs. vector for large directory listings?
 - How is a `FileEntry` identified across adapters (inode / MFT ref / path)?
+
+## TSK adapter note (checked 2026-11-03)
+
+The live TSK source and Ubuntu package metadata (`libtsk-dev` 4.11.1) show a strong candidate for a follow-on adapter layer, but not a replacement for FileRelic's owned reader. The practical adapter contract remains: TSK stays in a narrow adapter module, reads through an image wrapper, and converts its output into FileRelic's typed structs with honest warnings and limitations. See `docs/TSK_FINDINGS.md` for the full written recommendation.

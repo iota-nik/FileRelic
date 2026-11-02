@@ -13,6 +13,7 @@ Cross-platform forensic recovery toolkit for disk images containing NTFS, APFS, 
 - [detect_file_system() control-flow graph](docs/DETECT_FILE_SYSTEM_CFG.png)
 - [Filesystem adapter contract (draft)](docs/ADAPTER_CONTRACT.md)
 - [Sleuth Kit research brief](docs/TSK_RESEARCH_BRIEF.md)
+- [TSK findings summary](docs/TSK_FINDINGS.md)
 - [Qt desktop-shell build notes](gui/README.md)
 - [Original project proposal](references/ORIGINAL_PROJECT_PROPOSAL.pdf)
 - [Supplied diagrams](references/diagrams/)
