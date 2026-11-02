@@ -30,5 +30,7 @@ cmake --build build
 ./build/gui/filerelic-gui
 ```
 
+The GUI does not show deleted-name listings yet; `filerelic ls --deleted` is CLI-only for now.
+
 Ubuntu 22.04/24.04 needs: `sudo apt install qt6-base-dev`.
 Skip the GUI explicitly with `cmake -S . -B build -DFILERELIC_BUILD_GUI=OFF`.

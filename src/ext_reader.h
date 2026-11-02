@@ -7,12 +7,18 @@
 // (direct + indirect), linear scan of directories, path lookup, and reading
 // regular-file content (sparse holes and unwritten extents read as zeros).
 //
+// Deleted-entry listing: finds names left behind in directory blocks (a removed
+// entry's bytes stay in the previous entry's slack space) and judges each one
+// from its inode and the block bitmap. It never reads or recovers file content.
+//
 // Does NOT understand (reported as limitations, never faked): inline data,
-// encryption, journal replay, deleted entries, symbolic-link targets.
+// encryption, journal replay (old inodes in the journal), symbolic-link targets,
+// deleted inodes that no directory entry names any more.
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -59,6 +65,9 @@ public:
     Resolved resolve(const std::string& path);
     // Lists a directory (capped; sets listing.limitation if truncated or damaged).
     void list(const InodeInfo& directory, DirectoryListing& listing);
+    // Finds unlinked entries whose names are still in this directory's blocks.
+    // Each gets an honest DeletedStatus; nothing is claimed recoverable.
+    void list_deleted(const InodeInfo& directory, DeletedListing& listing);
     // Streams a regular file's bytes to `sink`.
     ContentReadResult read_content(const InodeInfo& file, const ByteSink& sink);
 
@@ -69,7 +78,19 @@ private:
         std::uint32_t inodes_per_group = 0;
         std::uint16_t descriptor_size = 32;
         bool is_64bit = false;
+        std::uint32_t inodes_count = 0;
+        std::uint64_t blocks_count = 0;
+        std::uint32_t first_data_block = 0;
+        std::uint32_t blocks_per_group = 0;
     };
+    struct RawInode {
+        std::uint16_t mode = 0;
+        std::uint16_t links_count = 0;
+        std::uint32_t dtime = 0;
+        std::uint32_t flags = 0;
+    };
+    using BitmapCache = std::map<std::uint64_t, std::vector<std::uint8_t>>;
+    enum class BlockState { free_block, allocated, unknown };
     struct MapState;
 
     ExtVolume(ReadOnlySource& source, std::uint64_t start, Geometry geometry, Trace trace)
@@ -77,6 +98,9 @@ private:
 
     void trace(const std::string& line) const { if (trace_) trace_(line); }
     InodeInfo read_inode(std::uint32_t inode_number);
+    bool read_raw_inode(std::uint32_t inode_number, RawInode& out);
+    BlockState block_state(std::uint64_t block, BitmapCache& cache);
+    void judge_deleted(DeletedEntryInfo& entry, BitmapCache& cache);
     bool locate_inode(std::uint32_t inode_number, std::uint64_t& offset, std::string& reason);
     void walk_extent_node(const std::uint8_t* node, std::size_t node_size, int levels_left,
                           std::vector<ExtentInfo>& out, std::string& limitation);

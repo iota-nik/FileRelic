@@ -26,6 +26,14 @@ struct ListingResult {
     DirectoryListing listing;               // set when `path` is a directory
 };
 
+struct DeletedListingResult {
+    bool ok = false;
+    std::string error;
+    std::uint64_t partition_number = 0;
+    std::string path;                       // the directory that was examined
+    DeletedListing listing;
+};
+
 struct FileReadSummary {
     ReadStatus status = ReadStatus::failed;
     std::string error;
@@ -45,6 +53,12 @@ struct ExtractionResult {
 ListingResult list_path(const std::filesystem::path& image,
                         std::uint64_t partition_number,
                         const std::string& path);
+
+// Lists names that were unlinked from the directory at `path` but are still on
+// disk, each with an honest status. Does not read or recover any file content.
+DeletedListingResult list_deleted_path(const std::filesystem::path& image,
+                                       std::uint64_t partition_number,
+                                       const std::string& path);
 
 // Streams a file's bytes to `sink` and hashes what was delivered.
 FileReadSummary read_file(const std::filesystem::path& image,

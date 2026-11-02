@@ -27,8 +27,8 @@ Working:
   inodes in any block group; ext4 extent trees including index levels; multi-block
   root directory. Validated against `debugfs` on two real `mke2fs` images
   (1 KiB and 4 KiB blocks): 135 entries each, 0 mismatches. Content is read
-  via `ExtVolume::read_content`; deleted entries, inline-data files, symlink
-  targets, and directory extraction are not supported.
+  via `ExtVolume::read_content`; inline-data files, symlink
+  targets, and directory extraction are not supported. **Deleted-name listing** (`ExtVolume::list_deleted`, `ls --deleted`): finds names left in directory slack space and entries whose inode number was zeroed; each gets a `DeletedStatus` (name_only, inode_in_use, empty_file, block_map_cleared, blocks_reused, blocks_partly_reused, likely_intact, unknown). It never reads file content, so `likely_intact` only means the recorded blocks are free now. Not covered: deleted inodes no directory names, journal copies, deleted names inside htree index slack, and recursion into subdirectories.
 - CLI: `inspect [-v] <image>` (`inspect-image` is a deprecated alias), `ls [-v] [-p N] <image> [path]`, `cat [-p N] <image> <path>`, `extract [-p N] <image> <path> <outdir>`, `demo`, `version`, `help`. Exit codes 0/1/2.
 - File access inside ext images: path lookup, directory listing, file content for extent-mapped (ext4) and block-mapped (ext2/3, incl. double/triple indirect) files, sparse holes. `extract` writes `<name>.partial`, renames when complete, never overwrites, reports status (complete/PARTIAL/FAILED) and SHA-256 of the output bytes. Safety: 1 GiB cap on zero-filled holes per file; overlapping extents rejected; refuses to write over the source image.
 - Human-readable output (done): the core builds plain-language `ReportSection`s once
@@ -87,9 +87,7 @@ builds. There is no automated test suite.
 
 ## Recommended next sequence
 
-1. **Deleted-file visibility on ext4** (scan inodes for dtime/unlinked entries,
-   report as "metadata found, recovery status unknown", then try content read
-   and report honestly). Also recursive/directory extraction and inline data.
+1. **Deleted-file visibility on ext4:** names done (`ls --deleted`). Still to do: an orphan-inode scan (dtime set, no name), then try a content read of a deleted entry and report honestly (only then may "recovered" be claimed, and only with fixture evidence). Also recursive/directory extraction and inline data.
 2. **TSK research** (no teammate: do it in-session): `docs/TSK_RESEARCH_BRIEF.md`
    -> write `docs/TSK_FINDINGS.md` (version, license, per-filesystem capability,
    custom image backend, fixture commands) before NTFS work.
@@ -201,3 +199,7 @@ matches `debugfs`; a `ReadOnlySource` abstraction; one root CMake build. Next:
 read file content and hash it, finish the TSK research, freeze the adapter
 contract, then extraction and a JSON case manifest. Read docs/SESSION_HANDOFF.md
 and inspect Git state first."
+
+## Working rule from the owner (2026-11-02)
+
+Whenever code changes, update every affected `.md` in the same change (README, ARCHITECTURE, SESSION_HANDOFF, ROADMAP, DEVELOPMENT_PLAN, ADAPTER_CONTRACT, testdata/README, gui/README) and ship the changed files as an unzip-over-the-repo bundle.

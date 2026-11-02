@@ -28,7 +28,7 @@ except `FileImageSource`.
 | `filesystem_probe.*` | Signature detection for NTFS, APFS, XFS, ext-family, Btrfs. A signature is evidence, not support. |
 | `sha256.*` | Streaming SHA-256 (verified against hashlib/sha256sum on boundary sizes and a 5 MiB file). |
 | `volume_access.*` | High-level `list_path`, `read_file`, `extract_file`: pick the partition, open the ext volume, stream/hash/extract. The CLI and later the GUI call only these. |
-| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). No deleted entries, inline data, encryption, or symlink targets yet. |
+| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). Also `list_deleted()`: scans directory blocks for names left in slack space (and first-in-block entries whose inode was zeroed), then judges each from its inode (dtime, link count, size, block map) and the block bitmap. No inline data, encryption, journal replay, or symlink targets yet. |
 | `report_format.*` | Plain-language wording helpers shared by every interface: human sizes ("1.0 MiB"), partition-type names, filesystem descriptions, file/folder wording. Change wording here, once. |
 | `report_sections.*` | `build_sections()`: turns the typed results into `ReportSection`s (title, `Severity`, one-sentence summary, label/value `ReportRow`s, notes). |
 | `report_text.cpp` | `render_report()`: draws the sections as terminal text. Technical rows, `(detail)` text and the step trace appear only with `-v`. |
@@ -66,7 +66,7 @@ cmake -S . -B build && cmake --build build
 
 ## CLI conventions
 
-Shape: `filerelic <command> [options] [arguments]`. Commands: `inspect`, `ls`, `cat`, `extract`,
+Shape: `filerelic <command> [options] [arguments]`. `ls --deleted` (`-d`) lists deleted names in one directory. Commands: `inspect`, `ls`, `cat`, `extract`,
 `demo`, `version`, `help`. Every command accepts `-h/--help`. Results go to stdout;
 usage errors and failed operations go to stderr. Exit codes: 0 success,
 1 operation failed (e.g. unreadable image), 2 usage error. New commands should follow the same rules. `cat` writes file bytes to stdout and its Result/Size/SHA-256 lines to stderr. `inspect-image` is a

@@ -1,6 +1,7 @@
 #include "report_format.h"
 
 #include <cstdio>
+#include <ctime>
 #include <map>
 
 namespace filerelic {
@@ -110,6 +111,37 @@ std::string describe_validation(ValidationState state) {
     case ValidationState::unknown: break;
     }
     return "Not detected";
+}
+
+std::string describe_deleted_status(DeletedStatus status) {
+    switch (status) {
+    case DeletedStatus::name_only:
+        return "name found, but the inode number was erased - cannot tell which file it was";
+    case DeletedStatus::inode_in_use:
+        return "name found, but its inode is in use by a file that exists now";
+    case DeletedStatus::empty_file:
+        return "name found; the file was empty, so there is no data to recover";
+    case DeletedStatus::block_map_cleared:
+        return "name found, but the filesystem erased where the data was";
+    case DeletedStatus::blocks_reused:
+        return "name found, data blocks already reused";
+    case DeletedStatus::blocks_partly_reused:
+        return "name found, some data blocks already reused";
+    case DeletedStatus::likely_intact:
+        return "name found, data likely intact (not yet verified)";
+    case DeletedStatus::unknown:
+    default:
+        return "name found, recovery status could not be determined";
+    }
+}
+
+std::string format_unix_time_utc(std::uint32_t seconds) {
+    const std::time_t moment = static_cast<std::time_t>(seconds);
+    const std::tm* parts = std::gmtime(&moment);
+    if (parts == nullptr) return "unknown";
+    char buffer[40];
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", parts) == 0) return "unknown";
+    return buffer;
 }
 
 } // namespace filerelic

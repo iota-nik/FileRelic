@@ -73,14 +73,18 @@ void print_demo_help(std::ostream& out) {
 
 
 void print_ls_help(std::ostream& out) {
-    out << "Usage: filerelic ls [-v] [--partition N] <image> [path]\n\n"
+    out << "Usage: filerelic ls [-v] [--deleted] [--partition N] <image> [path]\n\n"
         << "Lists a directory inside an ext2/3/4 image (default path: /), or describes\n"
         << "one file. Nothing is mounted or modified.\n\n"
         << "Options:\n"
         << "  -p, --partition N   Partition number from 'filerelic inspect'\n"
         << "                      (default: the first ext2/3/4 partition)\n"
+        << "  -d, --deleted       List names that were deleted from the directory but\n"
+        << "                      are still on disk. Each gets a status; none is a promise\n"
+        << "                      that the file can be recovered.\n"
         << "  -h, --help          Show this help\n\n"
-        << "Example: filerelic ls testdata/real-ext4-1024.raw /docs\n";
+        << "Example: filerelic ls testdata/real-ext4-1024.raw /docs\n"
+        << "         filerelic ls --deleted testdata/real-ext4-1024.raw /docs\n";
 }
 
 void print_cat_help(std::ostream& out) {
@@ -160,6 +164,7 @@ struct VolumeArgs {
     std::uint64_t partition = 0;
     bool help = false;
     bool verbose = false;
+    bool deleted = false;
     std::string error;
 };
 
@@ -171,6 +176,8 @@ VolumeArgs parse_volume_args(const std::vector<std::string_view>& args) {
             parsed.help = true;
         } else if (argument == "-v" || argument == "--verbose") {
             parsed.verbose = true;
+        } else if (argument == "-d" || argument == "--deleted") {
+            parsed.deleted = true;
         } else if (argument == "-p" || argument == "--partition") {
             if (index + 1 >= args.size()) {
                 parsed.error = "missing number after " + std::string(argument);
@@ -215,6 +222,52 @@ void print_entry_line(const filerelic::DirectoryEntryInfo& entry, bool verbose) 
     std::cout << line.str() << '\n';
 }
 
+void print_deleted_line(const filerelic::DeletedEntryInfo& entry, bool verbose) {
+    const bool folder = entry.kind == filerelic::InodeKind::directory;
+    const bool known_kind = entry.kind != filerelic::InodeKind::unknown
+        && entry.kind != filerelic::InodeKind::other;
+    std::ostringstream line;
+    line << "  " << std::left << std::setw(7)
+         << (known_kind ? filerelic::describe_inode_kind(entry.kind) : std::string("?")) << ' '
+         << std::right << std::setw(11)
+         << (folder ? std::string("-")
+                    : entry.size_bytes ? filerelic::format_size_short(*entry.size_bytes) : "unknown")
+         << "   " << entry.name << (folder ? "/" : "");
+    if (verbose) {
+        line << "   (inode ";
+        if (entry.inode_number == 0) line << "erased"; else line << entry.inode_number;
+        line << ")";
+    }
+    std::cout << line.str() << '\n';
+    std::cout << "              -> " << filerelic::describe_deleted_status(entry.status) << '\n';
+    if (entry.deleted_time) {
+        std::cout << "                 deleted at " << filerelic::format_unix_time_utc(*entry.deleted_time)
+                  << " (recorded in the inode)\n";
+    }
+    if (!entry.note.empty()) std::cout << "                 " << entry.note << '\n';
+}
+
+int run_ls_deleted(const VolumeArgs& parsed, const std::string& path) {
+    const filerelic::DeletedListingResult result =
+        filerelic::list_deleted_path(parsed.positional[0], parsed.partition, path);
+    if (!result.ok) {
+        std::cerr << "filerelic ls: " << result.error << '\n';
+        return exit_failed;
+    }
+    const std::size_t count = result.listing.entries.size();
+    std::cout << result.path << "  -  " << count << (count == 1 ? " deleted name" : " deleted names")
+              << " found (partition " << result.partition_number << ")\n";
+    for (const auto& entry : result.listing.entries) print_deleted_line(entry, parsed.verbose);
+    std::cout << "Note: a deleted name is evidence, not a recovered file. Nothing was read or\n"
+              << "      extracted. Only names still inside this directory's blocks are shown;\n"
+              << "      deleted files whose names are gone, or older copies in the journal, are not.\n";
+    if (!result.listing.limitation.empty()) {
+        std::cerr << "Warning: the scan may be incomplete - " << result.listing.limitation << '\n';
+        return exit_failed;
+    }
+    return exit_ok;
+}
+
 int run_ls(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_ls_help(std::cout); return exit_ok; }
@@ -223,6 +276,7 @@ int run_ls(const std::vector<std::string_view>& args) {
         return usage_error("ls", "expected <image> and an optional <path>", print_ls_help);
     }
     const std::string path = parsed.positional.size() == 2 ? parsed.positional[1] : "/";
+    if (parsed.deleted) return run_ls_deleted(parsed, path);
 
     const filerelic::ListingResult result =
         filerelic::list_path(parsed.positional[0], parsed.partition, path);
@@ -273,6 +327,7 @@ int run_cat(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_cat_help(std::cout); return exit_ok; }
     if (!parsed.error.empty()) return usage_error("cat", parsed.error, print_cat_help);
+    if (parsed.deleted) return usage_error("cat", "--deleted only applies to ls", print_cat_help);
     if (parsed.positional.size() != 2) {
         return usage_error("cat", "expected <image> and <path>", print_cat_help);
     }
@@ -298,6 +353,7 @@ int run_extract(const std::vector<std::string_view>& args) {
     const VolumeArgs parsed = parse_volume_args(args);
     if (parsed.help) { print_extract_help(std::cout); return exit_ok; }
     if (!parsed.error.empty()) return usage_error("extract", parsed.error, print_extract_help);
+    if (parsed.deleted) return usage_error("extract", "--deleted only applies to ls", print_extract_help);
     if (parsed.positional.size() != 3) {
         return usage_error("extract", "expected <image> <path> <outdir>", print_extract_help);
     }

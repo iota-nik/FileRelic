@@ -57,6 +57,25 @@ independent `debugfs` tool with:
 python3 tools/verify_real_ext4.py build/filerelic testdata/real-ext4-1024.raw
 ```
 
+### Trying `ls --deleted` on the real fixture
+
+The fixture is a whole disk image: the ext4 filesystem starts 1 MiB in (partition
+sector 2048). `debugfs` therefore needs an offset, and you should work on a copy so
+the fixture stays pristine:
+
+```bash
+cp testdata/real-ext4-1024.raw /tmp/deleted-test.raw
+debugfs -w -R "rm /hello.txt" "/tmp/deleted-test.raw?offset=1048576"
+./build/filerelic ls --deleted /tmp/deleted-test.raw          # root folder
+./build/filerelic ls --deleted /tmp/deleted-test.raw /docs    # a sub-folder
+```
+
+(`debugfs rm` keeps the file's block list, so the status is usually "data likely
+intact". A real kernel delete often erases it, giving "the filesystem erased where
+the data was".) `debugfs ls -d "<image>?offset=1048576" /` is an independent way to
+list the same deleted names; entries whose inode number was zeroed appear only in
+FileRelic.
+
 File contents are checked with `python3 tools/verify_ext_content.py build/filerelic`
 (ground truth + `debugfs dump` + SHA-256). `python3 tools/create_real_ext2_fixture.py`
 adds `real-ext2-1024.raw` (about 130 MB, classic indirect blocks) to those checks.

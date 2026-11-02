@@ -155,6 +155,31 @@ ListingResult list_path(const std::filesystem::path& image,
     return result;
 }
 
+DeletedListingResult list_deleted_path(const std::filesystem::path& image,
+                                       std::uint64_t partition_number,
+                                       const std::string& path) {
+    DeletedListingResult result;
+    result.path = normalize(path);
+    OpenedVolume opened = open_volume(image, partition_number);
+    if (!opened.volume) {
+        result.error = opened.error;
+        return result;
+    }
+    result.partition_number = opened.partition_number;
+    const ExtVolume::Resolved target = opened.volume->resolve(result.path);
+    if (!target.ok) {
+        result.error = target.error;
+        return result;
+    }
+    if (target.inode.kind != InodeKind::directory) {
+        result.error = "not a directory: " + result.path;
+        return result;
+    }
+    opened.volume->list_deleted(target.inode, result.listing);
+    result.ok = true;
+    return result;
+}
+
 FileReadSummary read_file(const std::filesystem::path& image,
                           std::uint64_t partition_number,
                           const std::string& path,

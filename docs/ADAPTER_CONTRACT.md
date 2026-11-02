@@ -8,7 +8,10 @@ appears in `image_inspector.h`, the CLI, or the GUI.
 
 `ReadOnlySource` (`src/image_source.h`) is the one way to read image bytes. The
 ext reader already takes a source plus a partition start offset, which is the
-shape every adapter needs.
+shape every adapter needs. It also already implements `list_allocated`,
+`read_file_content` and `list_deleted_metadata` for ext2/3/4 (`ExtVolume::list_deleted`,
+statuses in `DeletedStatus`), a working reference for what an adapter must report
+for deleted entries: name evidence plus an honest status, never a recovery claim.
 
 ## Proposed interface
 

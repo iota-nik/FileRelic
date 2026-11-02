@@ -65,6 +65,37 @@ struct DirectoryListing {
     std::vector<DirectoryEntryInfo> entries;
 };
 
+// What FileRelic can honestly say about one deleted directory entry. None of
+// these is a promise of recovery: "likely_intact" means only that the blocks
+// the inode still points at are not in use by anything else right now.
+enum class DeletedStatus {
+    unknown,                // could not be judged (see DeletedEntryInfo::note)
+    name_only,              // the name survived, the inode number did not
+    inode_in_use,           // the inode number now belongs to a live file
+    empty_file,             // the file had no content, so there is nothing to recover
+    block_map_cleared,      // the filesystem erased where the data was
+    blocks_reused,          // all recorded data blocks are in use again
+    blocks_partly_reused,   // some recorded data blocks are in use again
+    likely_intact,          // name found, recorded blocks still free: data likely intact
+};
+
+// A directory entry that was unlinked but whose name is still on disk.
+struct DeletedEntryInfo {
+    std::string name;                           // raw on-disk name, made printable
+    std::uint32_t inode_number = 0;             // 0 when the filesystem erased it
+    InodeKind kind = InodeKind::unknown;        // from the inode, when still readable
+    std::optional<std::uint64_t> size_bytes;    // size recorded in the inode, if readable
+    std::optional<std::uint32_t> deleted_time;  // inode dtime, seconds since 1970 (UTC)
+    DeletedStatus status = DeletedStatus::unknown;
+    std::string note;                           // extra evidence, e.g. "2 of 5 blocks in use"
+};
+
+struct DeletedListing {
+    bool attempted = false;
+    std::string limitation;                     // why the scan may be incomplete, if it is
+    std::vector<DeletedEntryInfo> entries;
+};
+
 struct FileSystemInfo {
     FileSystemKind kind = FileSystemKind::unknown;
     std::string label = "unknown";

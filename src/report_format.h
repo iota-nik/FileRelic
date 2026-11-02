@@ -29,6 +29,12 @@ bool can_read_files(const FileSystemInfo& file_system);
 // "file", "folder", "link", "other"
 std::string describe_inode_kind(InodeKind kind);
 
+// One honest sentence for a deleted entry's status, e.g.
+// "name found, data likely intact". Never promises recovery.
+std::string describe_deleted_status(DeletedStatus status);
+// 1700000000 -> "2023-11-14 22:13:20 UTC"
+std::string format_unix_time_utc(std::uint32_t seconds);
+
 // Wording for the state of a partition table.
 std::string describe_validation(ValidationState state);
 

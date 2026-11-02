@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <set>
 #include <sstream>
 
 #include "byte_utils.h"
@@ -123,6 +124,13 @@ std::unique_ptr<ExtVolume> ExtVolume::open(ReadOnlySource& source,
     geometry.inode_size = inode_size;
     geometry.inodes_per_group = le32(superblock + 40);
     geometry.is_64bit = (incompatible_features & incompat_64bit) != 0;
+    geometry.inodes_count = le32(superblock + 0);
+    geometry.blocks_count = le32(superblock + 4);
+    geometry.first_data_block = le32(superblock + 20);
+    geometry.blocks_per_group = le32(superblock + 32);
+    if (geometry.is_64bit) {
+        geometry.blocks_count |= static_cast<std::uint64_t>(le32(superblock + 0x150)) << 32U;
+    }
     if (geometry.is_64bit) {
         geometry.descriptor_size = le16(superblock + 254);
         if (geometry.descriptor_size < 64 || geometry.descriptor_size > 1024) {
@@ -526,6 +534,309 @@ ExtVolume::Resolved ExtVolume::resolve(const std::string& path) {
     }
     current.ok = true;
     return current;
+}
+
+// ------------------------------------------------------ deleted entries --
+
+bool ExtVolume::read_raw_inode(std::uint32_t inode_number, RawInode& out) {
+    std::uint64_t offset = 0;
+    std::string reason;
+    if (inode_number == 0 || inode_number > geometry_.inodes_count
+        || !locate_inode(inode_number, offset, reason)) {
+        return false;
+    }
+    const ReadResult raw = source_.read(offset, geometry_.inode_size);
+    if (!raw.ok()) {
+        return false;
+    }
+    const std::uint8_t* inode = raw.bytes.data();
+    out.mode = le16(inode);
+    out.dtime = le32(inode + 20);
+    out.links_count = le16(inode + 26);
+    out.flags = le32(inode + 32);
+    return true;
+}
+
+// Is this block in use according to its group's block bitmap? A group flagged
+// BLOCK_UNINIT has no valid bitmap on disk; nothing but metadata lives there,
+// so a data block in it counts as free.
+ExtVolume::BlockState ExtVolume::block_state(std::uint64_t block, BitmapCache& cache) {
+    if (geometry_.blocks_per_group == 0 || block < geometry_.first_data_block
+        || block >= geometry_.blocks_count) {
+        return BlockState::unknown;
+    }
+    const std::uint64_t relative = block - geometry_.first_data_block;
+    const std::uint64_t group = relative / geometry_.blocks_per_group;
+    const std::uint64_t bit = relative % geometry_.blocks_per_group;
+
+    auto found = cache.find(group);
+    if (found == cache.end()) {
+        const std::uint64_t table_block = geometry_.block_size == 1024 ? 2 : 1;
+        const ReadResult descriptor = source_.read(
+            start_ + table_block * geometry_.block_size + group * geometry_.descriptor_size,
+            geometry_.descriptor_size);
+        if (!descriptor.ok()) {
+            return BlockState::unknown;
+        }
+        const std::uint8_t* bytes_in = descriptor.bytes.data();
+        std::uint64_t bitmap_block = le32(bytes_in);
+        if (geometry_.is_64bit && geometry_.descriptor_size >= 64) {
+            bitmap_block |= static_cast<std::uint64_t>(le32(bytes_in + 0x20)) << 32U;
+        }
+        const std::uint16_t group_flags = le16(bytes_in + 0x12);
+        std::vector<std::uint8_t> bitmap;
+        if ((group_flags & 0x2U) != 0) {
+            bitmap.assign(geometry_.block_size, 0);          // BLOCK_UNINIT: all data blocks free
+        } else {
+            if (bitmap_block == 0 || bitmap_block >= geometry_.blocks_count) {
+                return BlockState::unknown;
+            }
+            const ReadResult data = source_.read(start_ + bitmap_block * geometry_.block_size,
+                                                 geometry_.block_size);
+            if (!data.ok()) {
+                return BlockState::unknown;
+            }
+            bitmap = data.bytes;
+        }
+        found = cache.emplace(group, std::move(bitmap)).first;
+    }
+    if (bit / 8 >= found->second.size()) {
+        return BlockState::unknown;
+    }
+    return (found->second[bit / 8] >> (bit % 8)) & 1U ? BlockState::allocated : BlockState::free_block;
+}
+
+// Decides how much can honestly be said about one unlinked name, from evidence
+// only: the inode's own fields and whether its recorded blocks are in use.
+void ExtVolume::judge_deleted(DeletedEntryInfo& entry, BitmapCache& cache) {
+    constexpr std::uint64_t max_blocks_checked = 8ULL * 1024 * 1024;
+    if (entry.inode_number == 0) {
+        entry.status = DeletedStatus::name_only;
+        return;
+    }
+    RawInode raw;
+    if (!read_raw_inode(entry.inode_number, raw)) {
+        entry.status = DeletedStatus::unknown;
+        entry.note = "the inode could not be read";
+        return;
+    }
+    const bool in_use = raw.links_count > 0 && raw.dtime == 0;
+    const InodeInfo inode = read_inode(entry.inode_number);
+    entry.kind = inode.kind;
+    entry.size_bytes = inode.size_bytes;
+    if (raw.dtime != 0) {
+        entry.deleted_time = raw.dtime;
+    }
+    if (in_use) {
+        entry.status = DeletedStatus::inode_in_use;
+        entry.note = "it may be the same file under another name, or a different file that reused the number";
+        return;
+    }
+    if (inode.size_bytes && *inode.size_bytes == 0) {
+        entry.status = DeletedStatus::empty_file;
+        return;
+    }
+    if (inode.extents.empty()) {
+        if (!inode.limitation.empty() && inode.read && inode.kind != InodeKind::other) {
+            entry.status = DeletedStatus::unknown;
+            entry.note = inode.limitation;
+        } else {
+            entry.status = DeletedStatus::block_map_cleared;
+            entry.note = "the inode no longer lists any data blocks";
+        }
+        return;
+    }
+
+    std::uint64_t total = 0;
+    std::uint64_t allocated = 0;
+    std::uint64_t unknown = 0;
+    for (const ExtentInfo& extent : inode.extents) {
+        for (std::uint32_t index = 0; index < extent.length_blocks; ++index) {
+            if (total >= max_blocks_checked) {
+                entry.status = DeletedStatus::unknown;
+                entry.note = "too many blocks to check; stopped after "
+                    + std::to_string(max_blocks_checked);
+                return;
+            }
+            ++total;
+            switch (block_state(extent.physical_block + index, cache)) {
+            case BlockState::allocated: ++allocated; break;
+            case BlockState::unknown: ++unknown; break;
+            case BlockState::free_block: break;
+            }
+        }
+    }
+    if (unknown != 0) {
+        entry.status = DeletedStatus::unknown;
+        entry.note = "the inode points outside the volume or at unreadable bitmaps ("
+            + std::to_string(unknown) + " of " + std::to_string(total)
+            + " blocks); it may have been overwritten";
+    } else if (allocated == 0) {
+        entry.status = DeletedStatus::likely_intact;
+        entry.note = std::to_string(total) + (total == 1 ? " block is" : " blocks are")
+            + " free now; free does not mean untouched";
+    } else if (allocated == total) {
+        entry.status = DeletedStatus::blocks_reused;
+    } else {
+        entry.status = DeletedStatus::blocks_partly_reused;
+        entry.note = std::to_string(allocated) + " of " + std::to_string(total)
+            + " blocks are in use again";
+    }
+    if (!inode.limitation.empty()) {
+        entry.note += (entry.note.empty() ? "" : "; ") + inode.limitation;
+    }
+}
+
+void ExtVolume::list_deleted(const InodeInfo& directory, DeletedListing& listing) {
+    listing.attempted = true;
+    listing.entries.clear();
+    listing.limitation.clear();
+    if (directory.kind != InodeKind::directory) {
+        listing.limitation = "not a directory";
+        return;
+    }
+    if (!directory.limitation.empty()) {
+        listing.limitation = directory.limitation;
+        return;
+    }
+
+    // Names that exist now are not deleted; collect them so stale copies are skipped.
+    std::set<std::pair<std::uint32_t, std::string>> live;
+    const std::string live_problem = for_each_entry(directory,
+        [&](std::uint32_t inode_number, const std::string& raw_name) {
+            live.emplace(inode_number, raw_name);
+            return true;
+        });
+    if (!live_problem.empty()) {
+        listing.limitation = live_problem;
+    }
+
+    // A directory with a hash index keeps index data in the slack of its first
+    // block. Those bytes are not names, so slack after "." / ".." is skipped there.
+    bool indexed = false;
+    {
+        // The directory inode number is not stored in InodeInfo; the flag is read
+        // through the first live "." entry.
+        std::uint32_t self = 0;
+        for_each_entry(directory, [&](std::uint32_t inode_number, const std::string& raw_name) {
+            if (raw_name == ".") self = inode_number;
+            return false;
+        });
+        RawInode raw;
+        indexed = self != 0 && read_raw_inode(self, raw) && (raw.flags & 0x1000U) != 0;
+    }
+    if (indexed) {
+        listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+            + "indexed directory: names hidden next to \".\" and \"..\" are not examined";
+    }
+
+    struct Candidate { std::uint32_t inode_number; std::string raw_name; };
+    std::vector<Candidate> found;
+    const auto plausible_name = [](const std::uint8_t* name, std::size_t length) {
+        for (std::size_t index = 0; index < length; ++index) {
+            if (name[index] == 0 || name[index] == '/') return false;
+        }
+        return length > 0;
+    };
+
+    // Scans [begin, end) of a block for entries hidden after a live entry. A removed
+    // entry keeps its own header and name; the entry before it simply grew over it.
+    const std::function<void(const std::vector<std::uint8_t>&, std::size_t, std::size_t, int)>
+        scan_slack = [&](const std::vector<std::uint8_t>& block, std::size_t begin,
+                         std::size_t end, int depth) {
+            std::size_t position = begin;
+            while (depth < 64 && position + 8 <= end) {
+                const std::uint8_t* entry = block.data() + position;
+                const std::uint32_t inode_number = le32(entry);
+                const std::uint16_t record_length = le16(entry + 4);
+                const std::size_t name_length = entry[6];
+                if (inode_number == 0 || inode_number > geometry_.inodes_count
+                    || record_length < 8 || record_length % 4 != 0
+                    || record_length > end - position
+                    || name_length + 8 > record_length
+                    || !plausible_name(entry + 8, name_length)) {
+                    return;                                    // cannot tell where the next one starts
+                }
+                found.push_back({inode_number,
+                                 std::string(reinterpret_cast<const char*>(entry + 8), name_length)});
+                const std::size_t used = 8 + ((name_length + 3) & ~static_cast<std::size_t>(3));
+                scan_slack(block, position + used, position + record_length, depth + 1);
+                position += record_length;
+            }
+        };
+
+    const auto scan_directory_blocks = [&]() {
+    std::uint64_t blocks_read = 0;
+    for (const ExtentInfo& extent : directory.extents) {
+        if (extent.uninitialized) continue;
+        for (std::uint32_t block_index = 0; block_index < extent.length_blocks; ++block_index) {
+            if (++blocks_read > max_directory_blocks) {
+                listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                    + "directory has more than " + std::to_string(max_directory_blocks)
+                    + " blocks; scan truncated";
+                return;
+            }
+            const ReadResult data = source_.read(
+                start_ + (extent.physical_block + block_index) * geometry_.block_size,
+                geometry_.block_size);
+            if (!data.ok()) {
+                listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                    + "could not read a directory block";
+                return;
+            }
+            std::size_t offset = 0;
+            while (offset + 8 <= data.bytes.size()) {
+                const std::uint8_t* entry = data.bytes.data() + offset;
+                const std::uint32_t inode_number = le32(entry);
+                const std::uint16_t record_length = le16(entry + 4);
+                const std::size_t name_length = entry[6];
+                if (record_length < 8 || record_length % 4 != 0
+                    || record_length > data.bytes.size() - offset
+                    || name_length > static_cast<std::size_t>(record_length) - 8) {
+                    listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                        + "invalid directory-entry record; stopped safely";
+                    break;
+                }
+                const std::string raw_name(reinterpret_cast<const char*>(entry + 8), name_length);
+                const bool dot_entry = raw_name == "." || raw_name == "..";
+                if (inode_number == 0 && name_length > 0
+                    && plausible_name(entry + 8, name_length)) {
+                    // First entry of a block: removal only zeroes the inode number.
+                    found.push_back({0, raw_name});
+                }
+                if (inode_number != 0 || name_length > 0) {
+                    const std::size_t used = 8 + ((name_length + 3) & ~static_cast<std::size_t>(3));
+                    if (record_length > used && !(indexed && dot_entry)) {
+                        scan_slack(data.bytes, offset + used, offset + record_length, 0);
+                    }
+                }
+                offset += record_length;
+            }
+        }
+    }
+    };
+    scan_directory_blocks();
+
+    BitmapCache cache;
+    std::set<std::pair<std::uint32_t, std::string>> seen;
+    for (const Candidate& candidate : found) {
+        if (candidate.inode_number != 0 && live.count({candidate.inode_number, candidate.raw_name})) {
+            continue;
+        }
+        if (!seen.emplace(candidate.inode_number, candidate.raw_name).second) {
+            continue;
+        }
+        if (listing.entries.size() >= max_listing_entries) {
+            listing.limitation += std::string(listing.limitation.empty() ? "" : "; ")
+                + "listing truncated after " + std::to_string(max_listing_entries) + " entries";
+            break;
+        }
+        DeletedEntryInfo entry;
+        entry.name = printable_name(candidate.raw_name);
+        entry.inode_number = candidate.inode_number;
+        judge_deleted(entry, cache);
+        listing.entries.push_back(std::move(entry));
+    }
 }
 
 // ------------------------------------------------------------ content -----
