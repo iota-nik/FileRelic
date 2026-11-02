@@ -104,11 +104,11 @@ void print_cat_help(std::ostream& out) {
 
 void print_extract_help(std::ostream& out) {
     out << "Usage: filerelic extract [--partition N] [--deleted [--inode N]] <image> <path> <outdir>\n\n"
-        << "Copies one file out of the image into <outdir> (created if needed).\n"
-        << "Never overwrites an existing file and never writes into the image. The copy\n"
-        << "is written as <name>.partial and renamed only when it is complete.\n"
-        << "The SHA-256 identifies the OUTPUT bytes; it does not prove the recovery is\n"
-        << "complete or identical to the original file.\n\n"
+        << "Copies one file or one directory tree out of the image into <outdir>\n"
+        << "(created if needed). Never overwrites an existing file and never writes\n"
+        << "into the image. The copy is written as <name>.partial and renamed only when\n"
+        << "it is complete. The SHA-256 identifies the OUTPUT bytes; it does not prove\n"
+        << "the recovery is complete or identical to the original file.\n\n"
         << "  -d, --deleted       <path> is a DELETED name (folder + name, see 'ls --deleted').\n"
         << "                      FileRelic uses the deleted inode's block map or, if the\n"
         << "                      filesystem erased it, an older copy of the inode from the\n"
@@ -116,6 +116,7 @@ void print_extract_help(std::ostream& out) {
         << "                      become zeros and the result is PARTIAL (kept as <name>.partial).\n"
         << "  -i, --inode N       With --deleted: choose one entry when several share a name\n\n"
         << "Example: filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered\n"
+        << "         filerelic extract testdata/real-ext4-1024.raw /docs ./recovered\n"
         << "         filerelic extract --deleted testdata/real-ext4-1024.raw /hello.txt ./recovered\n";
 }
 
@@ -441,11 +442,22 @@ int run_extract(const std::vector<std::string_view>& args) {
     if (parsed.positional.size() != 3) {
         return usage_error("extract", "expected <image> <path> <outdir>", print_extract_help);
     }
-    const filerelic::ExtractionResult result = parsed.deleted
-        ? filerelic::extract_deleted_file(parsed.positional[0], parsed.partition,
-                                          parsed.positional[1], parsed.inode, parsed.positional[2])
-        : filerelic::extract_file(parsed.positional[0], parsed.partition,
-                                  parsed.positional[1], parsed.positional[2]);
+
+    filerelic::ExtractionResult result;
+    if (parsed.deleted) {
+        result = filerelic::extract_deleted_file(parsed.positional[0], parsed.partition,
+                                               parsed.positional[1], parsed.inode, parsed.positional[2]);
+    } else {
+        const auto listing = filerelic::list_path(parsed.positional[0], parsed.partition, parsed.positional[1]);
+        if (listing.ok && listing.kind == filerelic::InodeKind::directory) {
+            result = filerelic::extract_directory(parsed.positional[0], parsed.partition,
+                                                 parsed.positional[1], parsed.positional[2]);
+        } else {
+            result = filerelic::extract_file(parsed.positional[0], parsed.partition,
+                                            parsed.positional[1], parsed.positional[2]);
+        }
+    }
+
     if (result.read.status == filerelic::ReadStatus::failed && result.output_path.empty()) {
         std::cerr << "filerelic extract: " << result.read.error << '\n';
         return exit_failed;

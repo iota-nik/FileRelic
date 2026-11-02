@@ -406,6 +406,81 @@ ExtractionResult extract_file(const std::filesystem::path& image,
     });
 }
 
+ExtractionResult extract_directory(const std::filesystem::path& image,
+                                  std::uint64_t partition_number,
+                                  const std::string& path,
+                                  const std::filesystem::path& output_directory) {
+    ExtractionResult result;
+    result.read.partition_number = partition_number;
+    result.read.status = ReadStatus::complete;
+
+    OpenedVolume opened = open_volume(image, partition_number);
+    if (!opened.volume) {
+        result.read.error = opened.error;
+        result.read.status = ReadStatus::failed;
+        return result;
+    }
+
+    const std::string normalized = normalize(path);
+    const ExtVolume::Resolved target = opened.volume->resolve(normalized);
+    if (!target.ok) {
+        result.read.error = target.error;
+        result.read.status = ReadStatus::failed;
+        return result;
+    }
+    if (target.inode.kind != InodeKind::directory) {
+        result.read.error = "not a directory: " + normalized;
+        result.read.status = ReadStatus::failed;
+        return result;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(output_directory, ec);
+    if (ec || !std::filesystem::is_directory(output_directory, ec)) {
+        result.read.error = "cannot use output directory: " + output_directory.string();
+        result.read.status = ReadStatus::failed;
+        return result;
+    }
+
+    DirectoryListing listing;
+    opened.volume->list(target.inode, listing);
+    for (const auto& entry : listing.entries) {
+        if (entry.name == "." || entry.name == "..") continue;
+        const std::string child_path = normalized == "/" ? std::string("/") + entry.name : normalized + "/" + entry.name;
+        const std::filesystem::path child_out = output_directory / entry.name;
+        if (entry.inode.kind == InodeKind::directory) {
+            std::filesystem::create_directories(child_out, ec);
+            if (ec) {
+                result.read.error = "could not create directory " + child_out.string();
+                result.read.status = ReadStatus::failed;
+                return result;
+            }
+            const ExtractionResult child = extract_directory(image, partition_number, child_path, child_out);
+            if (child.read.status == ReadStatus::failed) {
+                result.read.status = ReadStatus::failed;
+                result.read.error = child.read.error;
+                return result;
+            }
+            if (child.read.status == ReadStatus::partial) {
+                result.read.status = ReadStatus::partial;
+            }
+        } else if (entry.inode.kind == InodeKind::regular_file) {
+            const ExtractionResult child = extract_file(image, partition_number, child_path, output_directory);
+            if (child.read.status == ReadStatus::failed) {
+                result.read.status = ReadStatus::failed;
+                result.read.error = child.read.error;
+                return result;
+            }
+            if (child.read.status == ReadStatus::partial) {
+                result.read.status = ReadStatus::partial;
+            }
+        }
+    }
+
+    result.output_path = output_directory;
+    return result;
+}
+
 ExtractionResult extract_deleted_file(const std::filesystem::path& image,
                                       std::uint64_t partition_number,
                                       const std::string& path,

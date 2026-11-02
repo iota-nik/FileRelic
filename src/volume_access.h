@@ -111,4 +111,12 @@ ExtractionResult extract_file(const std::filesystem::path& image,
                               const std::string& path,
                               const std::filesystem::path& output_directory);
 
+// Recursively extracts a directory tree from an ext-family image into output_directory.
+// Each regular file is copied using the same safety rules as extract_file();
+// directories are created under the target with their original relative layout.
+ExtractionResult extract_directory(const std::filesystem::path& image,
+                                  std::uint64_t partition_number,
+                                  const std::string& path,
+                                  const std::filesystem::path& output_directory);
+
 } // namespace filerelic

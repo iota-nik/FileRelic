@@ -1,0 +1,1 @@
+FileRelic synthetic ext4 directory-entry example.
