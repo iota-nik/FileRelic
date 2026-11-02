@@ -21,7 +21,7 @@ The development plan defines the architecture, workstream boundaries, shared int
 
 ## Development status
 
-The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition, filesystem, and ext root-directory/inode findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; the ext-shaped fixture also exercises selected superblock, directory, and inode reads. FileRelic does not yet provide general file inventory or recovery.
+The current milestone is a read-only image inspector with MBR, extended MBR/EBR, and GPT validation. The shared `InspectionReport` carries typed partition, filesystem, and ext root-directory/inode findings for the CLI and GUI. File-system checks identify probable NTFS, APFS, XFS, ext-family, and Btrfs signatures; for ext-family images FileRelic reads the superblock, group descriptors, ext4 extent trees, and the root directory (checked against `debugfs` on real `mke2fs` images; see [testdata/README.md](testdata/README.md)). `ls`, `cat` and `extract` list directories and copy files out of ext2/3/4 images with a SHA-256 of the output. It does not yet recover deleted files, and NTFS/APFS/XFS/Btrfs are signature-detection only.
 
 ## Build
 
@@ -30,9 +30,12 @@ One root build produces the shared core, the CLI, and (when Qt 6 is installed) t
 ```bash
 cmake -S . -B build
 cmake --build build
-./build/filerelic --help
+./build/filerelic help
 ./build/filerelic inspect testdata/practice-fs-ext4.raw
 ./build/filerelic inspect --verbose testdata/practice-fs-ext4.raw   # adds the step trace
+./build/filerelic ls testdata/real-ext4-1024.raw /docs                 # needs the generated fixture
+./build/filerelic cat testdata/real-ext4-1024.raw /hello.txt
+./build/filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered
 ./build/filerelic demo
 ./build/gui/filerelic-gui                                           # if Qt 6 was found
 ```
@@ -45,7 +48,7 @@ You do not need a real disk image to learn the current command. Generate a 1 MiB
 
 ```bash
 python3 tools/create_practice_image.py
-./build/filerelic inspect-image testdata/practice-mbr.raw
+./build/filerelic inspect testdata/practice-mbr.raw
 ```
 
 See [the test-data notes](testdata/README.md) for its exact layout.

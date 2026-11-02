@@ -25,7 +25,7 @@ The first supported file systems for meaningful file extraction are ext4 and NTF
 
 The immediate goal is a credible, working prototype suitable for demonstration before the full project is complete. It must be honest about its current limits.
 
-- `filerelic inspect-image` examines a raw image without modifying it.
+- `filerelic inspect` examines a raw image without modifying it.
 - It recognizes and validates MBR, extended MBR/EBR chains, and GPT layouts.
 - It lists valid partition boundaries and warns about malformed or out-of-bounds data.
 - It identifies a small set of file-system signatures where they are present.
@@ -41,7 +41,7 @@ This is a prototype of a forensic recovery tool, not yet a complete recovery sui
 | 1 — Image and MBR foundation | **Done:** bounded read-only image inspection, MBR/EBR validation, safe fixtures | byte offsets, sectors, partition bounds | Build together; no specialist needed |
 | 2 — GPT foundation | **Done:** protective MBR, primary/backup headers, CRC checks, partition array and fixture | checksums, redundant metadata, GUIDs | Build together; no specialist needed |
 | 3 — Shared inspection core | **Current baseline:** CMake core library; CLI and GUI call it; `InspectionReport` has typed table/partition/filesystem fields | library/API boundaries, value models, UI rendering | Keep one integrator while contracts are small |
-| 4 — Finish structured inspection | **Done 2026-11-02:** typed ext directory/inode records, remaining warnings and validation details; retire the compatibility trace; make one root build for CLI + optional GUI | returning data rather than printing, model-driven rendering | Nikunj + primary coding agent; group members can review the report model and fixtures |
+| 4 — Finish structured inspection | **Done 2026-11-02:** typed ext directory/inode/extent records, trace retired from default output, one root build for CLI + optional GUI | returning data rather than printing, model-driven rendering | Nikunj + primary coding agent; group members can review the report model and fixtures |
 | 5 — Real filesystem inventory | TSK (or a reviewed alternative) adapter; enumerate ext4 and NTFS files from controlled images | third-party parser boundary, allocated/deleted metadata versus recovery | One member researches parser/license/feature evidence while core API stabilizes |
 | 6 — Safe recovery and case data | Destination-only extraction, collision handling, SHA-256, statuses, versioned JSON manifest | streaming I/O, integrity limits, provenance | Separate contributors can own extraction safety and manifest schema after contracts freeze |
 | 7 — Recovery GUI and CLI workflows | Select candidates/destination, progress/cancel, inspect/export case report from same job API | asynchronous jobs, events, UI state | GUI and CLI work can split after the job API is stable |
@@ -68,14 +68,4 @@ Never run several agents against the same shared files. Shared models are change
 
 ## Immediate next step (updated 2026-11-02)
 
-Phase 4 is done: typed ext findings, trace retired from the default output, one root build, core split into focused files. Now: group member completes `docs/TSK_RESEARCH_BRIEF.md`; the group reviews `docs/ADAPTER_CONTRACT.md`; then the TSK adapter (phase 5). The older text below describes the work that was just completed.
-
-## Previous next step
-
-Finish making `InspectionReport` the complete source of truth. Add typed ext
-directory entries and inode observations, record remaining parser warnings
-directly, then remove the old output trace from the normal CLI path. After
-that, freeze the adapter contract and hand one group member the independent
-parser/fixture/licensing research task while the core gets prepared for a real
-ext4/NTFS inventory adapter. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) for
-the detailed implementation phases and the owner-specific learning plan.
+Phase 4 is done: typed ext findings (including ext4 extent trees, validated against `debugfs`), trace retired from default output, one root build, core split into focused files. `ls`, `cat` and `extract` with SHA-256 now work on ext2/3/4 (start of phase 6). Next: deleted-file visibility on ext4, then complete the TSK research ourselves (`docs/TSK_RESEARCH_BRIEF.md`), freeze `docs/ADAPTER_CONTRACT.md`, then NTFS (phase 5). See [SESSION_HANDOFF.md](SESSION_HANDOFF.md).

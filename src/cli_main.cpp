@@ -1,9 +1,27 @@
+// FileRelic command-line interface.
+//
+// Shape:  filerelic <command> [options] [arguments]
+// Output: results go to stdout; errors and failed inspections go to stderr.
+// Exit codes:  0 success   1 the operation failed (e.g. unreadable image)   2 bad usage
+
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "image_inspector.h"
+#include "volume_access.h"
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #ifndef FILERELIC_VERSION
 #define FILERELIC_VERSION "0.0.0"
@@ -11,18 +29,73 @@
 
 namespace {
 
-void print_help() {
-    std::cout << "FileRelic " << FILERELIC_VERSION << "\n"
-              << "Forensic recovery toolkit (development scaffold)\n\n"
-              << "Usage:\n"
-              << "  filerelic --version   Print the application version\n"
-              << "  filerelic --help      Show this help\n"
-              << "  filerelic inspect [--verbose] <path>\n"
-              << "                       Inspect a regular image file read-only.\n"
-              << "                       --verbose (or -v) appends the step-by-step trace.\n"
-              << "  filerelic inspect-image [--verbose] <path>\n"
-              << "                       Compatibility name for inspect\n"
-              << "  filerelic demo        Run the bundled safe inspection demonstration\n";
+constexpr int exit_ok = 0;
+constexpr int exit_failed = 1;
+constexpr int exit_usage = 2;
+
+void print_help(std::ostream& out) {
+    out << "FileRelic " << FILERELIC_VERSION << " - read-only forensic disk-image toolkit\n\n"
+        << "Usage:\n"
+        << "  filerelic <command> [options] [arguments]\n\n"
+        << "Commands:\n"
+        << "  inspect <image>   Inspect partitions and file systems in a disk image\n"
+        << "  ls <image> [path] List a directory (or describe a file) inside the image\n"
+        << "  cat <image> <path>        Print a file's contents from inside the image\n"
+        << "  extract <image> <path> <outdir>\n"
+        << "                    Copy a file out of the image, with a SHA-256 of the output\n"
+        << "  demo              Inspect every bundled practice image (needs ./testdata)\n"
+        << "  version           Print the version (also: --version, -V)\n"
+        << "  help [command]    Show help (also: --help, -h)\n\n"
+        << "Run 'filerelic help <command>' for the options of one command.\n\n"
+        << "Exit codes: 0 success, 1 operation failed, 2 usage error.\n"
+        << "FileRelic never modifies, mounts, or writes to the image.\n";
+}
+
+void print_inspect_help(std::ostream& out) {
+    out << "Usage: filerelic inspect [--verbose] <image>\n\n"
+        << "Reads a regular image file read-only and prints its partition table,\n"
+        << "partition ranges, file-system findings, and warnings.\n\n"
+        << "Options:\n"
+        << "  -v, --verbose   Also print the scanner's step-by-step trace\n"
+        << "  -h, --help      Show this help\n\n"
+        << "Example: filerelic inspect testdata/practice-fs-ext4.raw\n"
+        << "(The older name 'inspect-image' still works but is deprecated.)\n";
+}
+
+void print_demo_help(std::ostream& out) {
+    out << "Usage: filerelic demo\n\n"
+        << "Runs 'inspect' on the synthetic images in ./testdata (or next to the\n"
+        << "build directory). If you generated the real ext4 images with\n"
+        << "tools/create_real_ext4_fixture.py, those are included too.\n";
+}
+
+
+void print_ls_help(std::ostream& out) {
+    out << "Usage: filerelic ls [--partition N] <image> [path]\n\n"
+        << "Lists a directory inside an ext2/3/4 image (default path: /), or describes\n"
+        << "one file. Nothing is mounted or modified.\n\n"
+        << "Options:\n"
+        << "  -p, --partition N   Partition number from 'filerelic inspect'\n"
+        << "                      (default: the first ext2/3/4 partition)\n"
+        << "  -h, --help          Show this help\n\n"
+        << "Example: filerelic ls testdata/real-ext4-1024.raw /docs\n";
+}
+
+void print_cat_help(std::ostream& out) {
+    out << "Usage: filerelic cat [--partition N] <image> <path>\n\n"
+        << "Writes the file's bytes to standard output. A status line with the byte\n"
+        << "count and SHA-256 goes to standard error, so output can be piped or saved.\n\n"
+        << "Example: filerelic cat testdata/real-ext4-1024.raw /hello.txt\n";
+}
+
+void print_extract_help(std::ostream& out) {
+    out << "Usage: filerelic extract [--partition N] <image> <path> <outdir>\n\n"
+        << "Copies one file out of the image into <outdir> (created if needed).\n"
+        << "Never overwrites an existing file and never writes into the image. The copy\n"
+        << "is written as <name>.partial and renamed only when it is complete.\n"
+        << "The SHA-256 identifies the OUTPUT bytes; it does not prove the recovery is\n"
+        << "complete or identical to the original file.\n\n"
+        << "Example: filerelic extract testdata/real-ext4-1024.raw /hello.txt ./recovered\n";
 }
 
 std::filesystem::path find_demo_data_directory(const char* executable_path) {
@@ -34,6 +107,7 @@ std::filesystem::path find_demo_data_directory(const char* executable_path) {
 
     const std::filesystem::path executable = std::filesystem::absolute(executable_path, error);
     if (!error) {
+        // build/filerelic -> project root is two levels up from the executable file.
         const std::filesystem::path build_candidate = executable.parent_path().parent_path() / "testdata";
         if (std::filesystem::is_directory(build_candidate, error)) {
             return build_candidate;
@@ -42,93 +116,316 @@ std::filesystem::path find_demo_data_directory(const char* executable_path) {
     return {};
 }
 
-int run_demo(const char* executable_path) {
+int run_inspect(const std::vector<std::string_view>& args) {
+    bool verbose = false;
+    std::string_view path;
+    for (const std::string_view argument : args) {
+        if (argument == "-h" || argument == "--help") {
+            print_inspect_help(std::cout);
+            return exit_ok;
+        }
+        if (argument == "-v" || argument == "--verbose") {
+            verbose = true;
+        } else if (argument.size() > 1 && argument.front() == '-') {
+            std::cerr << "filerelic inspect: unknown option '" << argument << "'\n";
+            print_inspect_help(std::cerr);
+            return exit_usage;
+        } else if (path.empty()) {
+            path = argument;
+        } else {
+            std::cerr << "filerelic inspect: expected one image path, got more than one\n";
+            print_inspect_help(std::cerr);
+            return exit_usage;
+        }
+    }
+    if (path.empty()) {
+        std::cerr << "filerelic inspect: missing <image>\n";
+        print_inspect_help(std::cerr);
+        return exit_usage;
+    }
+
+    const auto report = filerelic::inspect_image(std::filesystem::path(std::string(path)));
+    // A failed inspection always includes its trace, so the cause is visible.
+    filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr,
+                             verbose || !report.succeeded());
+    return report.succeeded() ? exit_ok : exit_failed;
+}
+
+
+// Shared option parsing for ls / cat / extract.
+struct VolumeArgs {
+    std::vector<std::string> positional;
+    std::uint64_t partition = 0;
+    bool help = false;
+    std::string error;
+};
+
+VolumeArgs parse_volume_args(const std::vector<std::string_view>& args) {
+    VolumeArgs parsed;
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        const std::string_view argument = args[index];
+        if (argument == "-h" || argument == "--help") {
+            parsed.help = true;
+        } else if (argument == "-p" || argument == "--partition") {
+            if (index + 1 >= args.size()) {
+                parsed.error = "missing number after " + std::string(argument);
+                return parsed;
+            }
+            const std::string value(args[++index]);
+            char* end = nullptr;
+            const unsigned long long number = std::strtoull(value.c_str(), &end, 10);
+            if (value.empty() || *end != '\0' || number == 0) {
+                parsed.error = "partition must be a positive number, got '" + value + "'";
+                return parsed;
+            }
+            parsed.partition = number;
+        } else if (argument.size() > 1 && argument.front() == '-') {
+            parsed.error = "unknown option '" + std::string(argument) + "'";
+            return parsed;
+        } else {
+            parsed.positional.emplace_back(argument);
+        }
+    }
+    return parsed;
+}
+
+int usage_error(const std::string& command, const std::string& message,
+                void (*help)(std::ostream&)) {
+    std::cerr << "filerelic " << command << ": " << message << "\n";
+    help(std::cerr);
+    return exit_usage;
+}
+
+const char* kind_letter(filerelic::InodeKind kind) {
+    switch (kind) {
+    case filerelic::InodeKind::directory: return "d";
+    case filerelic::InodeKind::regular_file: return "-";
+    case filerelic::InodeKind::symbolic_link: return "l";
+    default: return "?";
+    }
+}
+
+void print_entry_line(const filerelic::DirectoryEntryInfo& entry) {
+    const filerelic::InodeInfo& inode = entry.inode;
+    std::cout << kind_letter(inode.kind) << ' ';
+    if (inode.size_bytes) {
+        std::cout << std::setw(12) << *inode.size_bytes;
+    } else {
+        std::cout << std::setw(12) << '?';
+    }
+    std::cout << "  " << entry.name << (inode.kind == filerelic::InodeKind::directory ? "/" : "")
+              << "  (inode " << entry.inode_number << ")";
+    if (!inode.limitation.empty()) {
+        std::cout << "  [" << inode.limitation << "]";
+    }
+    std::cout << '\n';
+}
+
+int run_ls(const std::vector<std::string_view>& args) {
+    const VolumeArgs parsed = parse_volume_args(args);
+    if (parsed.help) { print_ls_help(std::cout); return exit_ok; }
+    if (!parsed.error.empty()) return usage_error("ls", parsed.error, print_ls_help);
+    if (parsed.positional.empty() || parsed.positional.size() > 2) {
+        return usage_error("ls", "expected <image> and an optional <path>", print_ls_help);
+    }
+    const std::string path = parsed.positional.size() == 2 ? parsed.positional[1] : "/";
+
+    const filerelic::ListingResult result =
+        filerelic::list_path(parsed.positional[0], parsed.partition, path);
+    if (!result.ok) {
+        std::cerr << "filerelic ls: " << result.error << '\n';
+        return exit_failed;
+    }
+    std::cout << result.path << "  (partition " << result.partition_number << ")\n";
+    if (result.kind == filerelic::InodeKind::directory) {
+        for (const auto& entry : result.listing.entries) {
+            if (entry.name == "." || entry.name == "..") continue;
+            print_entry_line(entry);
+        }
+        if (!result.listing.limitation.empty()) {
+            std::cerr << "warning: " << result.listing.limitation << '\n';
+            return exit_failed;
+        }
+    } else {
+        print_entry_line(result.entry);
+    }
+    return exit_ok;
+}
+
+void print_read_summary(const filerelic::FileReadSummary& summary, std::ostream& out) {
+    const char* status = summary.status == filerelic::ReadStatus::complete ? "complete"
+        : summary.status == filerelic::ReadStatus::partial ? "PARTIAL" : "FAILED";
+    out << "Status: " << status << "\n"
+        << "Bytes: " << summary.bytes_delivered << " of " << summary.expected_size << '\n'
+        << "SHA-256 (of the output bytes): " << summary.sha256_hex << '\n';
+    for (const std::string& note : summary.notes) out << "Note: " << note << '\n';
+    if (!summary.error.empty()) out << "Problem: " << summary.error << '\n';
+}
+
+int run_cat(const std::vector<std::string_view>& args) {
+    const VolumeArgs parsed = parse_volume_args(args);
+    if (parsed.help) { print_cat_help(std::cout); return exit_ok; }
+    if (!parsed.error.empty()) return usage_error("cat", parsed.error, print_cat_help);
+    if (parsed.positional.size() != 2) {
+        return usage_error("cat", "expected <image> and <path>", print_cat_help);
+    }
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);      // file bytes must not be altered by text mode
+#endif
+    const filerelic::FileReadSummary summary = filerelic::read_file(
+        parsed.positional[0], parsed.partition, parsed.positional[1],
+        [](const std::uint8_t* data, std::size_t length) {
+            return std::fwrite(data, 1, length, stdout) == length;
+        });
+    std::fflush(stdout);
+    // Nothing was read at all (bad path, wrong partition, ...): just say why.
+    if (summary.status == filerelic::ReadStatus::failed && summary.partition_number == 0) {
+        std::cerr << "filerelic cat: " << summary.error << '\n';
+        return exit_failed;
+    }
+    print_read_summary(summary, std::cerr);
+    return summary.status == filerelic::ReadStatus::complete ? exit_ok : exit_failed;
+}
+
+int run_extract(const std::vector<std::string_view>& args) {
+    const VolumeArgs parsed = parse_volume_args(args);
+    if (parsed.help) { print_extract_help(std::cout); return exit_ok; }
+    if (!parsed.error.empty()) return usage_error("extract", parsed.error, print_extract_help);
+    if (parsed.positional.size() != 3) {
+        return usage_error("extract", "expected <image> <path> <outdir>", print_extract_help);
+    }
+    const filerelic::ExtractionResult result = filerelic::extract_file(
+        parsed.positional[0], parsed.partition, parsed.positional[1], parsed.positional[2]);
+    if (result.read.status == filerelic::ReadStatus::failed && result.output_path.empty()) {
+        std::cerr << "filerelic extract: " << result.read.error << '\n';
+        return exit_failed;
+    }
+    std::cout << "Extracted: " << parsed.positional[1] << " (partition "
+              << result.read.partition_number << ")\n"
+              << "Output: " << result.output_path.string() << '\n';
+    print_read_summary(result.read, std::cout);
+    std::cout << "Remember: the hash identifies the output bytes; it does not prove the file\n"
+              << "was recovered completely or matches the original.\n";
+    return result.read.status == filerelic::ReadStatus::complete ? exit_ok : exit_failed;
+}
+
+int run_demo(const std::vector<std::string_view>& args, const char* executable_path) {
+    for (const std::string_view argument : args) {
+        if (argument == "-h" || argument == "--help") {
+            print_demo_help(std::cout);
+            return exit_ok;
+        }
+        std::cerr << "filerelic demo: takes no arguments (got '" << argument << "')\n";
+        print_demo_help(std::cerr);
+        return exit_usage;
+    }
+
     const std::filesystem::path test_data = find_demo_data_directory(executable_path);
     if (test_data.empty()) {
         std::cerr << "Error: could not locate the bundled testdata directory.\n"
                   << "Run this command from the FileRelic project directory.\n";
-        return 1;
+        return exit_failed;
     }
 
-    const std::array<std::pair<std::string_view, std::string_view>, 9> examples{{
+    std::vector<std::pair<std::string_view, std::string_view>> examples{
         {"Valid MBR layout", "practice-mbr.raw"},
         {"Extended MBR and logical partitions", "practice-mbr-extended.raw"},
         {"Invalid partition-boundary warning", "practice-mbr-out-of-bounds.raw"},
         {"GPT primary/backup validation", "practice-gpt.raw"},
-        {"ext4 metadata and root-directory entries", "practice-fs-ext4.raw"},
+        {"ext4 metadata and root-directory entries (hand-made fixture)", "practice-fs-ext4.raw"},
         {"NTFS filesystem signature", "practice-fs-ntfs.raw"},
         {"APFS filesystem signature", "practice-fs-apfs.raw"},
         {"XFS filesystem signature", "practice-fs-xfs.raw"},
         {"Btrfs filesystem signature", "practice-fs-btrfs.raw"},
+    };
+    // Generated, optional: real mke2fs images (see tools/create_real_ext4_fixture.py).
+    const std::array<std::pair<std::string_view, std::string_view>, 2> optional_examples{{
+        {"Real ext4, 1 KiB blocks (extent tree)", "real-ext4-1024.raw"},
+        {"Real ext4, 4 KiB blocks (extent tree)", "real-ext4-4096.raw"},
     }};
+    for (const auto& example : optional_examples) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(test_data / std::string(example.second), error)) {
+            examples.push_back(example);
+        }
+    }
 
     std::cout << "FileRelic safe demonstration\n"
               << "All images are synthetic and inspected read-only.\n";
-    int result = 0;
+    int result = exit_ok;
     for (const auto& [title, filename] : examples) {
         std::cout << "\n=== " << title << " ===\n";
-        const auto report = filerelic::inspect_image(test_data / filename);
+        const auto report = filerelic::inspect_image(test_data / std::string(filename));
         filerelic::render_report(report, std::cout);
         if (!report.succeeded()) {
-            result = 1;
+            result = exit_failed;
         }
     }
     return result;
 }
 
-int run_inspect(int argc, char* argv[]) {
-    bool verbose = false;
-    const char* path = nullptr;
-    for (int index = 2; index < argc; ++index) {
-        const std::string_view argument(argv[index]);
-        if (argument == "--verbose" || argument == "-v") {
-            verbose = true;
-        } else if (path == nullptr) {
-            path = argv[index];
-        } else {
-            path = nullptr;
-            break;
-        }
+int run_help(const std::vector<std::string_view>& args) {
+    if (args.empty()) {
+        print_help(std::cout);
+        return exit_ok;
     }
-    if (path == nullptr) {
-        std::cerr << "Usage: filerelic inspect [--verbose] <path>\n";
-        return 2;
+    if (args[0] == "inspect" || args[0] == "inspect-image") {
+        print_inspect_help(std::cout);
+        return exit_ok;
     }
-
-    const auto report = filerelic::inspect_image(path);
-    // Always print the report on the stream that matches success/failure; a
-    // failed inspection still carries its trace so the cause is visible.
-    filerelic::render_report(report, report.succeeded() ? std::cout : std::cerr,
-                             verbose || !report.succeeded());
-    return report.exit_code;
+    if (args[0] == "demo") {
+        print_demo_help(std::cout);
+        return exit_ok;
+    }
+    if (args[0] == "ls") { print_ls_help(std::cout); return exit_ok; }
+    if (args[0] == "cat") { print_cat_help(std::cout); return exit_ok; }
+    if (args[0] == "extract") { print_extract_help(std::cout); return exit_ok; }
+    std::cerr << "filerelic help: unknown command '" << args[0] << "'\n";
+    return exit_usage;
 }
 
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc == 1 || std::string_view(argv[1]) == "--help") {
-        print_help();
-        return 0;
+    if (argc == 1) {
+        print_help(std::cout);
+        return exit_ok;
     }
 
-    if (std::string_view(argv[1]) == "--version") {
+    const std::string_view command(argv[1]);
+    const std::vector<std::string_view> args(argv + 2, argv + argc);
+
+    if (command == "--help" || command == "-h") {
+        return run_help({});
+    }
+    if (command == "help") {
+        return run_help(args);
+    }
+    if (command == "--version" || command == "-V" || command == "version") {
         std::cout << FILERELIC_VERSION << '\n';
-        return 0;
+        return exit_ok;
+    }
+    if (command == "inspect") {
+        return run_inspect(args);
+    }
+    if (command == "inspect-image") {
+        std::cerr << "note: 'inspect-image' is deprecated; use 'filerelic inspect'\n";
+        return run_inspect(args);
+    }
+    if (command == "ls") {
+        return run_ls(args);
+    }
+    if (command == "cat") {
+        return run_cat(args);
+    }
+    if (command == "extract") {
+        return run_extract(args);
+    }
+    if (command == "demo") {
+        return run_demo(args, argv[0]);
     }
 
-    if (std::string_view(argv[1]) == "inspect-image" || std::string_view(argv[1]) == "inspect") {
-        return run_inspect(argc, argv);
-    }
-
-    if (std::string_view(argv[1]) == "demo") {
-        if (argc != 2) {
-            std::cerr << "Usage: filerelic demo\n";
-            return 2;
-        }
-        return run_demo(argv[0]);
-    }
-
-    std::cerr << "Unknown command: " << argv[1]
-              << "\nRun 'filerelic --help' for available commands.\n";
-    return 2;
+    std::cerr << "filerelic: unknown command '" << command << "'\n\n";
+    print_help(std::cerr);
+    return exit_usage;
 }

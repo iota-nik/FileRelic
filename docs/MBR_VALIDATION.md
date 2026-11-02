@@ -27,4 +27,4 @@ FileRelic walks valid EBR chains with a 128-record safety limit, image/extended-
 
 ## Current scope
 
-The shared inspection core reads regular image files only and does not mount or modify them. Its filesystem checks are lightweight identification clues for NTFS, APFS, ext-family, XFS, and Btrfs. The `InspectionReport` returns typed partition bounds and validation warnings to both the CLI and Qt GUI. Full filesystem inventory and recovery are later milestones.
+The shared inspection core reads regular image files only, through the read-only `ReadOnlySource`, and does not mount or modify them. Partition logic lives in `src/partition_scanner.cpp`; logical MBR partitions are numbered from 5. Its filesystem checks are lightweight identification clues for NTFS, APFS, ext-family, XFS, and Btrfs; only ext-family has a metadata reader. The `InspectionReport` returns typed partition bounds and validation warnings to both the CLI and Qt GUI. Full filesystem inventory and recovery are later milestones.

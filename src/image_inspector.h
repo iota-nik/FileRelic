@@ -32,6 +32,14 @@ enum class ValidationState { unknown, valid, warning, invalid };
 enum class InodeKind { unknown, regular_file, directory, symbolic_link, other };
 enum class DataMapping { unknown, direct_blocks, extent_tree, none };
 
+// One contiguous run of blocks belonging to a file (ext4 extent).
+struct ExtentInfo {
+    std::uint64_t logical_block = 0;     // position inside the file, in blocks
+    std::uint32_t length_blocks = 0;
+    std::uint64_t physical_block = 0;    // position inside the filesystem, in blocks
+    bool uninitialized = false;          // allocated but reads as zeros
+};
+
 // What we learned about one inode (the record that describes a file).
 struct InodeInfo {
     bool read = false;                          // true once the inode bytes were decoded
@@ -39,8 +47,9 @@ struct InodeInfo {
     InodeKind kind = InodeKind::unknown;
     std::optional<std::uint64_t> size_bytes;
     DataMapping mapping = DataMapping::unknown;
-    std::optional<std::uint32_t> first_data_block;
+    std::optional<std::uint64_t> first_data_block;
     std::optional<std::uintmax_t> first_data_byte;   // relative to the image start
+    std::vector<ExtentInfo> extents;                 // ext4 extent mapping, in file order
 };
 
 struct DirectoryEntryInfo {

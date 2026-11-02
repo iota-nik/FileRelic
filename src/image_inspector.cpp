@@ -71,6 +71,10 @@ std::string describe_entry(const DirectoryEntryInfo& entry) {
     if (inode.read) {
         parts.push_back(inode_kind_name(inode.kind));
         if (inode.size_bytes) parts.push_back(std::to_string(*inode.size_bytes) + " bytes");
+        if (inode.mapping == DataMapping::extent_tree) {
+            parts.push_back(std::to_string(inode.extents.size())
+                            + (inode.extents.size() == 1 ? " extent" : " extents"));
+        }
         if (inode.first_data_block) {
             parts.push_back("first data block " + std::to_string(*inode.first_data_block)
                             + " (byte " + std::to_string(*inode.first_data_byte) + ")");

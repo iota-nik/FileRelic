@@ -8,16 +8,16 @@ This plan is intended to be split across multiple developers or coding agents. K
 
 ## Current implementation snapshot
 
-The repository has progressed beyond the initial scaffold described in the
-original planning notes. It now includes MBR/EBR/GPT read-only inspection,
-synthetic fixtures, a shared `filerelic_core` library, and a Qt GUI. The CLI
-and GUI both call the core. `InspectionReport` contains typed partition-table,
-partition, filesystem-signature, selected ext-superblock, warning, and
-diagnostic data. The CLI prints a typed summary and retains a detailed legacy
-trace for ext directory/inode observations that have not yet been modeled.
-General file inventory, deleted-file recovery, extraction, case storage, and
-cross-platform release packaging remain future work. For the current order and
-owner-specific next tasks, see [ROADMAP.md](ROADMAP.md) and
+(Updated 2026-11-02.) The repository has progressed beyond the initial scaffold.
+It includes MBR/EBR/GPT read-only inspection, synthetic and generated real-ext4
+fixtures, a shared `filerelic_core` library split into a read-only image source,
+partition scanner, filesystem probe and ext reader, and a Qt GUI. The CLI and GUI
+both render the typed `InspectionReport`, which contains partition-table,
+partition, filesystem-signature, ext superblock, root-directory/inode/extent,
+warning and diagnostic data. The old text trace is now only an optional step log
+(`--verbose`, GUI Advanced). General file inventory, content reading, deleted-file
+recovery, extraction, case storage, and cross-platform packaging remain future
+work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 For the staged project outcome, working-project definition, and timing for specialist agents, see [ROADMAP.md](ROADMAP.md). The project begins with a small verifiable CLI core, grows into a shared recovery engine, and then adds the Qt desktop GUI and cross-platform packaging.
@@ -247,12 +247,14 @@ Assign each stream to a separate agent/owner. Each owner should work on its name
 The plan defines **8 responsibility areas**: one integrator (Agent 0) and seven specialist workstreams (Agents A–G). These are not eight agents that must be started together. The recommended project staffing is one primary coding/integration agent (Agent 0, with the project owner learning and reviewing) at first. Bring in one specialist agent for a bounded task when needed. After the contracts and CI are working, use at most two or three simultaneous agents on independent directories. Only grow toward all seven specialists if the project, schedule, and review capacity justify that overhead.
 
 The present implementation has passed the first image-inspection vertical slice:
-CLI and Qt GUI link to one core API and safe fixtures cover MBR, EBR, GPT, and
-filesystem signatures. Continue with typed ext directory/inode findings, then
-freeze an adapter contract before integrating a real filesystem inventory
-library. Do not start database, recovery, and specialist adapter coding against
-unstable shared models; independent parser/license/fixture research can proceed
-in parallel. The staged owner/member assignments are in [ROADMAP.md](ROADMAP.md).
+CLI and Qt GUI link to one core API; typed ext directory/inode/extent findings
+exist; a `ReadOnlySource` abstraction is in place. Next: read file content and
+hash it, then freeze the adapter contract ([ADAPTER_CONTRACT.md](ADAPTER_CONTRACT.md))
+before integrating a real filesystem inventory library. Do not start database,
+recovery, and specialist adapter coding against unstable shared models;
+independent parser/license/fixture research ([TSK_RESEARCH_BRIEF.md](TSK_RESEARCH_BRIEF.md))
+can proceed in parallel. The staged owner/member assignments are in
+[ROADMAP.md](ROADMAP.md).
 
 | Agent | Primary responsibility | Owns | Main upstream dependency |
 | --- | --- | --- | --- |
@@ -365,7 +367,7 @@ The lead owns repository-wide decisions, shared contracts, merge order, acceptan
 
 **Implement in order:**
 
-1. CLI commands: `version`, `inspect-image`, `scan`, `export-report`. Accept an image path and case/output directory; use stable exit codes and JSON-lines events for automation.
+1. CLI commands: `version`, `inspect`, `scan`, `export-report`. Accept an image path and case/output directory; use stable exit codes and JSON-lines events for automation.
 2. Qt 6 Widgets main window: recent/open case, choose image, choose output directory, show source hash/size after inspection, and require explicit scan start. Do not introduce QML, Electron, or Python into the production UI without an approved architecture decision.
 3. Scan view: phase, determinate/indeterminate progress, pause only if truly supported (otherwise omit), cancel, logs/warnings, recovered candidates.
 4. Results view: recovery status, path/name, size, parser source, confidence/limitations, computed output hash, and preview for safe supported formats. Preview must be read-only and must not execute recovered files.

@@ -9,10 +9,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Core library: everything that inspects an image. CLI and GUI both link it.
 add_library(filerelic_core STATIC
     src/image_source.cpp
+    src/sha256.cpp
     src/ext_reader.cpp
     src/filesystem_probe.cpp
     src/partition_scanner.cpp
     src/image_inspector.cpp
+    src/volume_access.cpp
 )
 target_include_directories(filerelic_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 

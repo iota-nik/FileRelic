@@ -26,16 +26,16 @@ python3 tools/create_practice_image.py
 Then inspect it:
 
 ```bash
-./build/filerelic inspect-image testdata/practice-mbr.raw
-./build/filerelic inspect-image testdata/practice-mbr-multiple-valid.raw
-./build/filerelic inspect-image testdata/practice-mbr-out-of-bounds.raw
-./build/filerelic inspect-image testdata/practice-mbr-extended.raw
-./build/filerelic inspect-image testdata/practice-gpt.raw
-./build/filerelic inspect-image testdata/practice-fs-ntfs.raw
-./build/filerelic inspect-image testdata/practice-fs-apfs.raw
-./build/filerelic inspect-image testdata/practice-fs-xfs.raw
-./build/filerelic inspect-image testdata/practice-fs-ext4.raw
-./build/filerelic inspect-image testdata/practice-fs-btrfs.raw
+./build/filerelic inspect testdata/practice-mbr.raw
+./build/filerelic inspect testdata/practice-mbr-multiple-valid.raw
+./build/filerelic inspect testdata/practice-mbr-out-of-bounds.raw
+./build/filerelic inspect testdata/practice-mbr-extended.raw
+./build/filerelic inspect testdata/practice-gpt.raw
+./build/filerelic inspect testdata/practice-fs-ntfs.raw
+./build/filerelic inspect testdata/practice-fs-apfs.raw
+./build/filerelic inspect testdata/practice-fs-xfs.raw
+./build/filerelic inspect testdata/practice-fs-ext4.raw
+./build/filerelic inspect testdata/practice-fs-btrfs.raw
 ```
 
 The expected classifications follow the [MBR validation rules](../docs/MBR_VALIDATION.md): the first two images should be reported as likely MBR tables, while the out-of-bounds image must produce an entry-validation warning.
@@ -44,3 +44,19 @@ The NTFS, APFS, XFS, and Btrfs fixtures prove signature identification only. A
 matching magic value is evidence, not a full filesystem validation. The ext4
 fixture additionally has safe synthetic superblock fields so FileRelic can test
 its first filesystem-metadata reader without mounting an image.
+
+## Real ext4 images (generated, not committed)
+
+`python3 tools/create_real_ext4_fixture.py 1024` (or `4096`) builds
+`testdata/real-ext4-<size>.raw`, a genuine fsck-clean ext4 filesystem made by
+`mke2fs` (Linux, e2fsprogs) inside an MBR partition, with known files including a
+sparse file that needs a multi-level extent tree. Check FileRelic against the
+independent `debugfs` tool with:
+
+```bash
+python3 tools/verify_real_ext4.py build/filerelic testdata/real-ext4-1024.raw
+```
+
+File contents are checked with `python3 tools/verify_ext_content.py build/filerelic`
+(ground truth + `debugfs dump` + SHA-256). `python3 tools/create_real_ext2_fixture.py`
+adds `real-ext2-1024.raw` (about 130 MB, classic indirect blocks) to those checks.
