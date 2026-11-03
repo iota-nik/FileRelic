@@ -7,9 +7,13 @@
 
 #include "case_manifest.h"
 #include "image_inspector.h"
+#include "volume_access.h"
 
+class QComboBox;
 class QCheckBox;
 class QLabel;
+class QLineEdit;
+class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QToolButton;
@@ -29,7 +33,11 @@ private slots:
     void analyzeImage();
     void chooseOutputDirectory();
     void exportCaseReport();
+    void refreshCandidates();
+    void extractSelectedCandidate();
     void inspectionFinished();
+    void extractionFinished();
+    void manifestWriteFinished();
     void toggleRawLog(bool visible);
     void toggleDetails(bool shown);
 
@@ -40,6 +48,11 @@ private:
     void addSectionCard(const filerelic::ReportSection& section);
     void addResultCard(const QString& title, const QString& content, const QString& tone = {});
     void updateWorkflowState();
+    bool saveAutomaticManifest();
+    void startManifestWrite(const QString& path,
+                            const filerelic::CaseManifestOptions& options,
+                            bool automatic);
+    void populateFileSystems();
 
     QLabel* selectedImage_;
     QLabel* imageDetails_;
@@ -48,6 +61,12 @@ private:
     QPushButton* analyzeButton_;
     QPushButton* reportButton_;
     QPushButton* destinationButton_;
+    QPushButton* refreshCandidatesButton_;
+    QPushButton* extractButton_;
+    QComboBox* partitionSelector_;
+    QLineEdit* candidatePath_;
+    QCheckBox* showDeleted_;
+    QListWidget* candidateList_;
     QPlainTextEdit* rawLog_;
     QToolButton* rawLogToggle_;
     QCheckBox* detailsToggle_;
@@ -56,9 +75,18 @@ private:
     QWidget* resultsContainer_;
     QVBoxLayout* resultsLayout_;
     QFutureWatcher<filerelic::InspectionReport>* inspectionWatcher_;
+    QFutureWatcher<filerelic::ExtractionResult>* extractionWatcher_;
+    QFutureWatcher<QString>* manifestWatcher_;
     QString selectedImagePath_;
     QString exportDirectory_;
+    QString automaticManifestPath_;
+    bool pendingManifestAutomatic_ = false;
+    QString currentDirectory_ = "/";
+    QString pendingExtractionPath_;
+    bool pendingExtractionDeleted_ = false;
+    bool pendingExtractionDirectory_ = false;
     QString rawReport_;
+    std::vector<filerelic::CaseActionInfo> caseActions_;
     filerelic::InspectionReport report_;
     bool haveReport_ = false;
 };

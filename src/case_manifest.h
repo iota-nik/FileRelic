@@ -1,16 +1,30 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "image_inspector.h"
 
 namespace filerelic {
 
+struct CaseActionInfo {
+    std::string operation;
+    std::string source_path;
+    std::string status;
+    std::string output_path;
+    std::optional<std::uint64_t> bytes_written;
+    std::string sha256;
+    std::string note;
+};
+
 struct CaseManifestOptions {
     std::string case_name;
     std::string examiner;
     std::string output_directory;
+    std::vector<CaseActionInfo> actions;
 };
 
 // Builds a JSON manifest from the typed inspection result. It is intentionally

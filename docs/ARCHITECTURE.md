@@ -27,13 +27,14 @@ except `FileImageSource`.
 | `partition_scanner.*` | MBR, extended MBR (EBR chain, logical partitions numbered from 5), GPT with CRC checks. |
 | `filesystem_probe.*` | Signature detection for NTFS, APFS, XFS, ext-family, Btrfs. A signature is evidence, not support. |
 | `sha256.*` | Streaming SHA-256 (verified against hashlib/sha256sum on boundary sizes and a 5 MiB file). |
-| `volume_access.*` | High-level `list_path`, `list_deleted_path`, `read_file`, `extract_file` and their deleted twins `read_deleted_file`, `extract_deleted_file` (share one output-writing helper, so `.partial`/never-overwrite rules are identical): pick the partition, open the ext volume, stream/hash/extract. The CLI and later the GUI call only these. |
-| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). Also `list_deleted()`: scans directory blocks for names left in slack space (and first-in-block entries whose inode was zeroed), then judges each from its inode (dtime, link count, size, block map) and the block bitmap. Also `recover_deleted_content()`: reads a deleted regular file via its inode's block map or, if that was erased, via an older inode copy found by `find_journal_copies()` (scans the jbd2 journal area read-only: descriptor blocks, 32/64-bit tags, csum v2/v3, wrap-around). It checks every data block against the block bitmap, zero-fills blocks now owned by other data and reports PARTIAL; it refuses inodes that belong to a live file. No inline data, encryption, journal replay (the journal is searched, never replayed), external journals, or symlink targets yet. |
+| `volume_access.*` | High-level `list_path`, `list_deleted_path`, `read_file`, `extract_file`, `extract_directory` and deleted-file recovery: pick the partition, open the ext volume, stream/hash/extract. The CLI and GUI use this boundary; `.partial`/never-overwrite rules are shared. |
+| `ext_reader.*` | `ExtVolume`: ext2/3/4 reader. Superblock, 32/64-bit group descriptors, inodes in any group, ext4 extent trees, ext2/3 block maps (direct + indirect), directory scan, path lookup, file-content streaming (holes and unwritten extents read as zeros; hole total capped at 1 GiB; overlapping extents rejected). Supports inline regular files and fast symlinks stored directly in the inode (not inline-directory traversal or full symlink traversal). Also lists deleted directory names, scans orphan inodes, and recovers deleted regular files from inode mappings or read-only journal copies. Reused data blocks are zero-filled and reported PARTIAL; journal contents are searched, never replayed. External journals, encryption, fast-commit areas, and broader deleted directory/symlink recovery remain unsupported. |
 | `report_format.*` | Plain-language wording helpers shared by every interface: human sizes ("1.0 MiB"), partition-type names, filesystem descriptions, file/folder wording. Change wording here, once. |
 | `report_sections.*` | `build_sections()`: turns the typed results into `ReportSection`s (title, `Severity`, one-sentence summary, label/value `ReportRow`s, notes). |
 | `report_text.cpp` | `render_report()`: draws the sections as terminal text. Technical rows, `(detail)` text and the step trace appear only with `-v`. |
 | `image_inspector.*` | `inspect_image()` (scan, then `build_sections`) and `render_trace()`. |
 | `cli_main.cpp` | CLI argument handling and `demo`. |
+| `case_manifest.*` | Writes schema-versioned JSON from inspection results and GUI extraction action records. The GUI saves it automatically after inspection and updates it after each extraction. |
 
 ## Report model
 
@@ -52,6 +53,10 @@ warnings, diagnostics and presentation sections. Unknown values stay explicit
 
 `report.trace` is a step log for `filerelic inspect --verbose` and the GUI
 Advanced view. Results are never recovered from it.
+
+The GUI's inspection and extraction run on worker threads. Progress is shown as
+indeterminate because the current core does not emit progress events; cancellation
+is intentionally unavailable until the core can stop work cooperatively.
 
 ## Build
 

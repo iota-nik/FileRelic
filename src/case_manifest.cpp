@@ -103,6 +103,29 @@ std::string render_string_array_json(const std::vector<std::string>& items) {
     return out.str();
 }
 
+std::string render_actions_json(const std::vector<CaseActionInfo>& actions) {
+    std::ostringstream out;
+    out << "[";
+    for (std::size_t index = 0; index < actions.size(); ++index) {
+        if (index != 0) out << ",";
+        const CaseActionInfo& action = actions[index];
+        out << "{"
+            << "\"operation\":\"" << json_escape(action.operation) << "\","
+            << "\"source_path\":\"" << json_escape(action.source_path) << "\","
+            << "\"status\":\"" << json_escape(action.status) << "\","
+            << "\"output_path\":\"" << json_escape(action.output_path) << "\","
+            << "\"bytes_written\":";
+        if (action.bytes_written) out << *action.bytes_written;
+        else out << "null";
+        out << ","
+            << "\"sha256\":\"" << json_escape(action.sha256) << "\","
+            << "\"note\":\"" << json_escape(action.note) << "\""
+            << "}";
+    }
+    out << "]";
+    return out.str();
+}
+
 std::string render_report_summary(const InspectionReport& report) {
     std::ostringstream out;
     out << "{\n"
@@ -140,6 +163,7 @@ std::string render_case_manifest_json(const InspectionReport& report,
         << "  \"summary\": " << render_report_summary(report) << ",\n"
         << "  \"warnings\": " << render_string_array_json(report.warnings) << ",\n"
         << "  \"diagnostics\": " << render_string_array_json(report.diagnostics) << ",\n"
+        << "  \"actions\": " << render_actions_json(options.actions) << ",\n"
         << "  \"partitions\": [";
     for (std::size_t index = 0; index < report.partitions.size(); ++index) {
         if (index != 0) out << ",";

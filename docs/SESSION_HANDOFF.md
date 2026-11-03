@@ -39,10 +39,13 @@ Working:
   Scanner warnings and `ls`/`cat`/`extract` output are in plain words too (human sizes,
   file/folder, Result/Size/SHA-256 lines; `ls -v` adds inodes).
 - Qt Widgets GUI: section cards, "Show technical details" toggle, Advanced step-trace view,
-  worker-thread inspection, `filerelic-gui <image>` to open an image directly, and a simple
-  case-workflow panel for selecting a destination folder and exporting a versioned JSON manifest.
+  worker-thread inspection/extraction, `filerelic-gui <image>` to open an image directly,
+  ext partition browsing, deleted-name candidate listing, selected file/directory/candidate
+  extraction, and automatic JSON investigation-manifest saving. The manifest is updated with
+  each extraction's status, output path, byte count, SHA-256, and notes. Progress is honestly
+  indeterminate; no cancel button is shown because the core cannot cooperatively cancel yet.
 - Case manifest/report layer: a shared `src/case_manifest.*` helper writes a versioned JSON manifest
-  from the `InspectionReport`, and the CLI exposes `filerelic report <image> [output.json]`.
+  from the `InspectionReport` and GUI action records; the CLI exposes `filerelic report <image> [output.json]`.
 - NTFS adapter contract: a conservative `src/ntfs_adapter.*` status module documents the current design
   boundary, with a clear limitation that NTFS inventory and deleted-file recovery remain future work.
 - Synthetic fixtures in `testdata/` (generator `tools/create_practice_image.py`)
@@ -89,30 +92,30 @@ Verified when this was written (Linux only): clean `-Wall -Wextra` build; CLI
 summaries identical to the pre-refactor version for all ten practice fixtures
 except the intended logical-partition renaming and ext root-directory block;
 ~1,450 truncated/mutated images under ASan+UBSan without a crash; GUI builds,
-launches headless and was screenshotted offscreen (ext4 and out-of-bounds MBR images). **Not verified:** clicking through the GUI (toggle), Windows/macOS
-builds. There is no automated test suite.
+launches headless and was screenshotted offscreen (ext4 and out-of-bounds MBR images).
+The GUI's automatic manifest flow was also launched headlessly and its generated JSON
+parsed successfully; CTest covers the CLI report path and manifest extraction-action
+serialization. **Not verified:** manual GUI interaction through browsing/extraction,
+Windows/macOS builds, or full automated coverage of ext4 parsing and recovery.
 
 ## Recommended next sequence
 
-1. **Deleted files on ext4:** names (`ls --deleted`) and recovery (`extract --deleted`, with journal fallback) are done. `ls --orphaned` is now added as the missing orphan-inode scan. Recursive directory extraction is implemented at the CLI/core boundary, and the next ext work is inline-data handling and edge cases such as symlinks and metadata-only files.
-2. **TSK research** (no teammate: do it in-session): `docs/TSK_RESEARCH_BRIEF.md`
-   -> write `docs/TSK_FINDINGS.md` (version, license, per-filesystem capability,
-   custom image backend, fixture commands) before NTFS work.
-3. **Review the adapter contract** (`docs/ADAPTER_CONTRACT.md`, a draft) with the
-   group and freeze it, then write the TSK adapter for ext4 and NTFS inventory.
-   Keep third-party types out of the shared report, CLI, and GUI.
-4. **Safe extraction and provenance:** write only to a user-chosen destination,
-   collision-safe names, partial/failed status, SHA-256 of output (identifies
-   bytes, does not prove completeness), then a versioned JSON case manifest
-   before any PDF report. A minimal manifest export layer is now in place and
-   will be extended before any PDF renderer is added.
-5. **GUI and CLI workflows:** progress, cancel, candidate selection, destination,
-   report export, only when the core can supply those states. The current GUI has
-   destination selection and report export for a single inspected image; a richer
-   job-state view remains the next step.
-6. **Platform coverage:** build and package on Windows and macOS (only Linux has
-   been built). Mark APFS encryption, XFS, Btrfs, snapshots, TRIM as limits.
-7. **Regenerate diagrams** from the final code. The old class-diagram drafts were
+1. **NTFS inventory:** the TSK research and contract notes are complete, but there
+   is no real NTFS parser/adapter yet. Implement inventory behind FileRelic's own
+   types and validate it on controlled images before making support claims.
+2. **Cross-platform validation:** build and package on Windows and macOS (only
+   Linux has been built); keep APFS encryption, XFS, Btrfs, snapshots, and TRIM
+   limits explicit.
+3. **Automated coverage:** expand beyond the CLI report smoke test to focused
+   tests for ext listing, extraction, deleted recovery, bounds, and manifest
+   actions.
+4. **GUI cancellation:** add cooperative cancellation only after the inspection
+   and extraction core can stop safely. The current GUI reports indeterminate
+   progress and keeps the UI responsive, but does not pretend to cancel.
+5. **PDF/report polish:** the GUI automatically writes a JSON investigation
+   manifest and updates it with extraction results. A human-readable/PDF report
+   is still a separate future deliverable.
+6. **Regenerate diagrams** from the final code. The old class-diagram drafts were
    removed; `references/` keeps the original proposal and diagrams as source
    material (they describe XFS/Btrfs only; scope has since moved to ext4/NTFS first).
 

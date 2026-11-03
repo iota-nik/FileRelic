@@ -13,11 +13,15 @@ a log only: no card reads it.
 - Draws the core's plain-language `ReportSection`s as cards (green = good, amber = warning, red = problem) with label/value rows.
 - "Show technical details" re-renders the same report with sector numbers, IDs and features.
 - `filerelic-gui <image>` opens and inspects an image immediately.
-- Lets the user choose an output folder and export a versioned case manifest once an inspection has succeeded.
+- Automatically saves a versioned JSON investigation manifest after inspection, including failed inspections and their diagnostics.
+- Browses directories on detected ext2/3/4 partitions, can show deleted-name candidates, and extracts the selected file, directory, or deleted candidate to the chosen output folder.
+- Records each extraction's status, output path, byte count, SHA-256, and notes in the same manifest.
+- Shows indeterminate progress while inspection or extraction is running; the core does not yet support cooperative cancellation, so there is no cancel control.
+- Still offers manual manifest export as a separate copy.
 - Runs the inspection off the UI thread so the window stays responsive.
 
-This is still a read-only inspection front-end, not a full recovery tool. It never writes
-to the selected image itself; it only writes JSON case data to a separate output directory.
+The GUI writes reports and recovered files only to the selected output directory, never
+to the image. Deleted-name entries are candidates, not promises of successful recovery.
 
 ## Build
 
@@ -30,8 +34,6 @@ cmake --build build
 ./build/filerelic --help
 ./build/gui/filerelic-gui
 ```
-
-The GUI does not show deleted-name listings yet; `filerelic ls --deleted` is CLI-only for now.
 
 Ubuntu 22.04/24.04 needs: `sudo apt install qt6-base-dev`.
 Skip the GUI explicitly with `cmake -S . -B build -DFILERELIC_BUILD_GUI=OFF`.

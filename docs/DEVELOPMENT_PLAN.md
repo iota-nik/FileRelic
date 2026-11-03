@@ -18,9 +18,11 @@ warning and diagnostic data. The old text trace is now only an optional step log
 (`--verbose`, GUI Advanced). Deleted-name listing and recovery on ext2/3/4 (`ls --deleted`,
 `extract --deleted`, journal fallback, PARTIAL on reused blocks) exist. A minimal,
 versioned JSON case-manifest writer is now available through `filerelic report` and
-in the GUI export workflow. General file inventory, deleted-file recovery on other
-file systems, richer job orchestration, and cross-platform packaging remain future
-work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
+the GUI automatically saves inspection findings and records ext extraction outcomes.
+The GUI browses ext directories, presents deleted-name candidates, and extracts
+selections to a separate destination. Cooperative cancellation, general file
+inventory, deleted-file recovery on other file systems, and cross-platform packaging
+remain future work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 For the staged project outcome, working-project definition, and timing for specialist agents, see [ROADMAP.md](ROADMAP.md). The project begins with a small verifiable CLI core, grows into a shared recovery engine, and then adds the Qt desktop GUI and cross-platform packaging.

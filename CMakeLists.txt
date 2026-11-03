@@ -32,6 +32,9 @@ enable_testing()
 add_test(NAME cli-report-smoke
     COMMAND filerelic report ${CMAKE_CURRENT_SOURCE_DIR}/testdata/practice-fs-ext4.raw
             ${CMAKE_CURRENT_BINARY_DIR}/cli-report-smoke.json)
+add_executable(case-manifest-test tests/case_manifest_test.cpp)
+target_link_libraries(case-manifest-test PRIVATE filerelic_core)
+add_test(NAME case-manifest-actions COMMAND case-manifest-test)
 
 target_compile_definitions(filerelic_core PUBLIC FILERELIC_VERSION="${PROJECT_VERSION}")
 
