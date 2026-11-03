@@ -46,6 +46,8 @@ Working:
   indeterminate; no cancel button is shown because the core cannot cooperatively cancel yet.
   The workspace is a resizable two-pane layout with scrollable controls/results, themed status
   states, keyboard shortcuts, and asynchronous candidate listing to keep the UI responsive.
+  The partition selector includes all non-container partitions and explains unsupported
+  filesystems instead of silently omitting them; only valid ext2/3/4 partitions can be browsed.
 - Case manifest/report layer: a shared `src/case_manifest.*` helper writes a versioned JSON manifest
   from the `InspectionReport` and GUI action records; the CLI exposes `filerelic report <image> [output.json]`.
 - NTFS adapter contract: a conservative `src/ntfs_adapter.*` status module documents the current design

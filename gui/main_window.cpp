@@ -37,6 +37,8 @@ constexpr int candidate_path_role = Qt::UserRole;
 constexpr int candidate_inode_role = Qt::UserRole + 1;
 constexpr int candidate_deleted_role = Qt::UserRole + 2;
 constexpr int candidate_directory_role = Qt::UserRole + 3;
+constexpr int partition_supported_role = Qt::UserRole + 4;
+constexpr int partition_explanation_role = Qt::UserRole + 5;
 
 QString formatSize(qint64 bytes) {
     constexpr qint64 kibibyte = 1024;
@@ -195,6 +197,7 @@ MainWindow::MainWindow(QWidget* parent)
     extractButton_->setEnabled(false);
     auto* browseControls = new QHBoxLayout();
     auto* partitionLabel = new QLabel("Partition", browserCard);
+    partitionLabel->setObjectName("fieldLabel");
     partitionLabel->setBuddy(partitionSelector_);
     browseControls->addWidget(partitionLabel);
     browseControls->addWidget(partitionSelector_);
@@ -292,6 +295,7 @@ MainWindow::MainWindow(QWidget* parent)
             padding: 9px 12px; }
         QFrame#card { background: #141c26; border: 1px solid #293545; border-radius: 10px; }
         QLabel#sectionLabel { color: #7db8ed; font-size: 11px; font-weight: 700; }
+        QLabel#fieldLabel { color: #bdc9d6; font-size: 12px; }
         QLabel#imagePath { color: #f4f7fb; font-size: 14px; font-weight: 600; }
         QLabel#status { color: #c2cedb; font-size: 12px; padding: 4px 2px; }
         QLabel#status[tone="success"] { color: #8ed5b0; }
@@ -334,6 +338,8 @@ MainWindow::MainWindow(QWidget* parent)
             alternate-background-color: #121b25;
             selection-background-color: #245174;
             selection-color: #f4f8fc; }
+        QComboBox:disabled, QLineEdit:disabled {
+            background: #151d27; color: #78889a; }
         QComboBox QAbstractItemView { background: #141c26; color: #e1e9f2;
             selection-background-color: #1769aa; }
         QListWidget::item { background: #0d141c; color: #dce5ef;
@@ -417,13 +423,16 @@ void MainWindow::updateWorkflowState() {
     const bool haveImage = !selectedImagePath_.isEmpty();
     const bool busy = inspectionWatcher_->isRunning() || extractionWatcher_->isRunning()
         || manifestWatcher_->isRunning() || candidatesWatcher_->isRunning();
-    const bool canBrowse = haveReport_ && report_.succeeded() && !busy
+    const bool havePartitions = haveReport_ && report_.succeeded()
         && partitionSelector_->count() != 0;
+    const bool selectedPartitionSupported = partitionSelector_->currentIndex() >= 0
+        && partitionSelector_->currentData(partition_supported_role).toBool();
+    const bool canBrowse = havePartitions && selectedPartitionSupported && !busy;
     chooseButton_->setEnabled(!busy);
     analyzeButton_->setEnabled(haveImage && !busy);
     destinationButton_->setEnabled(haveImage && !busy);
     reportButton_->setEnabled(haveImage && haveReport_ && !busy);
-    partitionSelector_->setEnabled(canBrowse);
+    partitionSelector_->setEnabled(havePartitions && !busy);
     candidatePath_->setEnabled(canBrowse);
     refreshCandidatesButton_->setEnabled(canBrowse);
     upDirectoryButton_->setEnabled(canBrowse && currentDirectory_ != "/");
@@ -560,28 +569,53 @@ void MainWindow::populateFileSystems() {
     const QSignalBlocker blocker(partitionSelector_);
     partitionSelector_->clear();
     for (const filerelic::PartitionInfo& partition : report_.partitions) {
-        if (partition.file_system.kind != filerelic::FileSystemKind::ext_family
-            || !partition.range_valid) {
-            continue;
-        }
-        const QString label = "Partition " + QString::number(partition.number) + " ("
-            + QString::fromStdString(filerelic::describe_file_system(partition.file_system)) + ")";
+        if (partition.extended) continue;
+        const QString fileSystem =
+            partition.file_system.signature_found
+                ? QString::fromStdString(filerelic::describe_file_system(partition.file_system))
+                : QStringLiteral("no recognized file system");
+        const bool supported = partition.range_valid
+            && partition.file_system.kind == filerelic::FileSystemKind::ext_family;
+        QString label = "Partition " + QString::number(partition.number)
+            + " — " + fileSystem;
+        if (!partition.range_valid) label += " (invalid range)";
+        else if (!supported) label += " (browsing unavailable)";
         partitionSelector_->addItem(label, QVariant::fromValue<qulonglong>(partition.number));
+        const int index = partitionSelector_->count() - 1;
+        partitionSelector_->setItemData(index, supported, partition_supported_role);
+        partitionSelector_->setItemData(
+            index,
+            supported ? QString() : (partition.range_valid
+                ? QStringLiteral("FileRelic can currently browse ext2/3/4 partitions only. This partition was detected as ")
+                    + fileSystem + "."
+                : QStringLiteral("This partition has an invalid or out-of-image range and cannot be opened.")),
+            partition_explanation_role);
     }
     currentDirectory_ = "/";
     candidatePath_->setText(currentDirectory_);
     candidateList_->clear();
     if (partitionSelector_->count() == 0 && report_.succeeded()) {
-        setStatusMessage("Inspection complete — no supported ext partition is available to browse.",
-                         "warning");
-    } else if (partitionSelector_->count() != 0 && report_.succeeded()) {
+        setStatusMessage("No browsable partition entries were found in this image.", "warning");
+    } else if (partitionSelector_->count() != 0 && report_.succeeded()
+               && partitionSelector_->currentData(partition_supported_role).toBool()) {
         refreshCandidates();
+    } else if (partitionSelector_->count() != 0 && report_.succeeded()) {
+        setStatusMessage(partitionSelector_->currentData(partition_explanation_role).toString(),
+                         "warning");
     }
 }
 
 void MainWindow::refreshCandidates() {
     candidateList_->clear();
     if (!haveReport_ || !report_.succeeded() || partitionSelector_->currentIndex() < 0) {
+        updateWorkflowState();
+        return;
+    }
+    if (!partitionSelector_->currentData(partition_supported_role).toBool()) {
+        const QString explanation = partitionSelector_->currentData(partition_explanation_role).toString();
+        auto* item = new QListWidgetItem(explanation, candidateList_);
+        item->setFlags(Qt::NoItemFlags);
+        setStatusMessage(explanation, "warning");
         updateWorkflowState();
         return;
     }

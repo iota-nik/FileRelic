@@ -15,6 +15,8 @@ a log only: no card reads it.
 - `filerelic-gui <image>` opens and inspects an image immediately.
 - Automatically saves a versioned JSON investigation manifest after inspection, including failed inspections and their diagnostics.
 - Browses directories on detected ext2/3/4 partitions, can show deleted-name candidates, and extracts the selected file, directory, or deleted candidate to the chosen output folder.
+- Lists every non-container partition in the selector, including unsupported ones; the user can choose them and sees why browsing is unavailable. Only valid ext2/3/4 partitions are browsable.
+- Uses the same readable foreground colors for field labels (including “Partition”) instead of allowing the desktop theme's default black text.
 - Records each extraction's status, output path, byte count, SHA-256, and notes in the same manifest.
 - Shows indeterminate progress while inspection or extraction is running; the core does not yet support cooperative cancellation, so there is no cancel control.
 - Still offers manual manifest export as a separate copy.
