@@ -10,6 +10,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QKeySequence>
 #include <QLayoutItem>
 #include <QLineEdit>
 #include <QListWidget>
@@ -18,6 +19,9 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSplitter>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -84,7 +88,8 @@ MainWindow::MainWindow(QWidget* parent)
       analyzeButton_(new QPushButton("Analyze image", this)),
       reportButton_(new QPushButton("Export case report", this)),
       destinationButton_(new QPushButton("Choose output folder", this)),
-      refreshCandidatesButton_(new QPushButton("Open folder", this)),
+      refreshCandidatesButton_(new QPushButton("Go", this)),
+      upDirectoryButton_(new QPushButton("Up", this)),
       extractButton_(new QPushButton("Extract selected", this)),
       partitionSelector_(new QComboBox(this)),
       candidatePath_(new QLineEdit("/", this)),
@@ -99,16 +104,17 @@ MainWindow::MainWindow(QWidget* parent)
       resultsLayout_(new QVBoxLayout(resultsContainer_)),
       inspectionWatcher_(new QFutureWatcher<filerelic::InspectionReport>(this)),
       extractionWatcher_(new QFutureWatcher<filerelic::ExtractionResult>(this)),
-      manifestWatcher_(new QFutureWatcher<QString>(this)) {
+      manifestWatcher_(new QFutureWatcher<QString>(this)),
+      candidatesWatcher_(new QFutureWatcher<CandidateLoadResult>(this)) {
     setWindowTitle("FileRelic — Disk Image Inspector and Recovery");
-    resize(1000, 700);
-    setMinimumSize(760, 540);
+    resize(1180, 780);
+    setMinimumSize(800, 560);
 
     auto* central = new QWidget(this);
     central->setObjectName("central");
     auto* layout = new QVBoxLayout(central);
-    layout->setContentsMargins(30, 28, 30, 28);
-    layout->setSpacing(16);
+    layout->setContentsMargins(24, 20, 24, 18);
+    layout->setSpacing(12);
 
     auto* title = new QLabel("FileRelic", central);
     title->setObjectName("title");
@@ -135,6 +141,19 @@ MainWindow::MainWindow(QWidget* parent)
     selectedImage_->setWordWrap(true);
     imageDetails_->setObjectName("muted");
     analyzeButton_->setObjectName("analyzeButton");
+    extractButton_->setObjectName("extractButton");
+    chooseButton_->setShortcut(QKeySequence::Open);
+    analyzeButton_->setShortcut(QKeySequence(Qt::Key_F5));
+    chooseButton_->setToolTip("Choose a disk image to inspect (Ctrl+O)");
+    analyzeButton_->setToolTip("Inspect the selected image (F5)");
+    reportButton_->setToolTip("Save a separate copy of the current investigation manifest");
+    destinationButton_->setToolTip("Choose where manifests and extracted files are saved");
+    refreshCandidatesButton_->setToolTip("Load the folder path shown here");
+    upDirectoryButton_->setToolTip("Move to the parent folder (Alt+Up)");
+    upDirectoryButton_->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Up));
+    extractButton_->setToolTip("Extract the selected live item or attempt recovery of a deleted candidate");
+    showDeleted_->setToolTip("Search this folder's directory metadata for deleted-name candidates");
+    candidateList_->setAlternatingRowColors(true);
     analyzeButton_->setEnabled(false);
     reportButton_->setEnabled(false);
     destinationButton_->setEnabled(false);
@@ -159,7 +178,6 @@ MainWindow::MainWindow(QWidget* parent)
     workflowProgress_->setRange(0, 100);
     workflowProgress_->setValue(0);
     workflowProgress_->setTextVisible(false);
-    layout->addWidget(imageCard);
 
     auto* browserCard = new QFrame(central);
     browserCard->setObjectName("card");
@@ -176,9 +194,12 @@ MainWindow::MainWindow(QWidget* parent)
     showDeleted_->setEnabled(false);
     extractButton_->setEnabled(false);
     auto* browseControls = new QHBoxLayout();
-    browseControls->addWidget(new QLabel("Partition", browserCard));
+    auto* partitionLabel = new QLabel("Partition", browserCard);
+    partitionLabel->setBuddy(partitionSelector_);
+    browseControls->addWidget(partitionLabel);
     browseControls->addWidget(partitionSelector_);
     browseControls->addWidget(candidatePath_, 1);
+    browseControls->addWidget(upDirectoryButton_);
     browseControls->addWidget(refreshCandidatesButton_);
     browserLayout->addLayout(browseControls);
     auto* candidateControls = new QHBoxLayout();
@@ -188,6 +209,7 @@ MainWindow::MainWindow(QWidget* parent)
     browserLayout->addLayout(candidateControls);
     candidateList_->setMinimumHeight(100);
     candidateList_->setMaximumHeight(160);
+    candidateList_->setUniformItemSizes(true);
     candidateList_->setEnabled(false);
     browserLayout->addWidget(candidateList_);
     auto* browserNote = new QLabel(
@@ -197,7 +219,20 @@ MainWindow::MainWindow(QWidget* parent)
     browserNote->setObjectName("muted");
     browserNote->setWordWrap(true);
     browserLayout->addWidget(browserNote);
-    layout->addWidget(browserCard);
+    auto* leftPanel = new QWidget(central);
+    auto* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 6, 0);
+    leftLayout->setSpacing(12);
+    leftLayout->addWidget(imageCard);
+    leftLayout->addWidget(browserCard, 1);
+    leftPanel->setMinimumWidth(310);
+
+    auto* leftScroll = new QScrollArea(central);
+    leftScroll->setObjectName("leftScroll");
+    leftScroll->setWidgetResizable(true);
+    leftScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    leftScroll->setFrameShape(QFrame::NoFrame);
+    leftScroll->setWidget(leftPanel);
 
     resultsLayout_->setContentsMargins(0, 0, 0, 0);
     resultsLayout_->setSpacing(12);
@@ -229,52 +264,83 @@ MainWindow::MainWindow(QWidget* parent)
     reportLayout->addWidget(resultsScroll, 1);
     reportLayout->addWidget(rawLogToggle_);
     reportLayout->addWidget(rawLog_);
-    layout->addWidget(reportCard, 1);
+    reportCard->setMinimumWidth(360);
+
+    auto* workspace = new QSplitter(Qt::Horizontal, central);
+    workspace->setObjectName("workspace");
+    workspace->setChildrenCollapsible(false);
+    workspace->setHandleWidth(7);
+    workspace->addWidget(leftScroll);
+    workspace->addWidget(reportCard);
+    workspace->setStretchFactor(0, 4);
+    workspace->setStretchFactor(1, 5);
+    workspace->setSizes({480, 580});
+    layout->addWidget(workspace, 1);
 
     status_->setObjectName("status");
+    status_->setWordWrap(true);
+    status_->setMinimumHeight(28);
     layout->addWidget(status_);
     setCentralWidget(central);
 
     setStyleSheet(R"(
-        QWidget#central { background: #10151d; color: #e7edf5; }
-        QLabel#title { color: #f6f8fb; font-size: 32px; font-weight: 700; }
-        QLabel#subtitle, QLabel#muted { color: #a9b8c9; font-size: 15px; }
-        QLabel#safetyNotice { background: #13342d; border: 1px solid #23634e;
-            border-radius: 7px; color: #a9edcc; font-size: 12px; font-weight: 600;
-            padding: 10px 12px; }
-        QFrame#card { background: #18212c; border: 1px solid #293848; border-radius: 10px; }
-        QLabel#sectionLabel { color: #8bb9e8; font-size: 12px; font-weight: 700; }
-        QLabel#imagePath { color: #f6f8fb; font-size: 15px; font-weight: 600; }
-        QLabel#status { color: #c1d0de; font-size: 14px; padding-left: 2px; }
-        QPushButton { background: #263749; border: 1px solid #38506a; border-radius: 6px;
-            color: #e8f0f8; font-weight: 600; padding: 9px 15px; }
-        QPushButton:hover { background: #314963; }
-        QPushButton:disabled { background: #202a35; color: #738193; }
-        QPushButton#analyzeButton { background: #236a9f; border-color: #3a8fc9; }
-        QPushButton#analyzeButton:hover { background: #2e7db8; }
-        QScrollArea#resultsScroll { background: transparent; border: none; }
+        QWidget#central { background: #0c1118; color: #e6edf5; }
+        QLabel#title { color: #f4f7fb; font-size: 30px; font-weight: 700; }
+        QLabel#subtitle, QLabel#muted { color: #9cabbc; font-size: 13px; }
+        QLabel#safetyNotice { background: #102923; border: 1px solid #245d49;
+            border-radius: 7px; color: #a9e8c8; font-size: 12px; font-weight: 600;
+            padding: 9px 12px; }
+        QFrame#card { background: #141c26; border: 1px solid #293545; border-radius: 10px; }
+        QLabel#sectionLabel { color: #7db8ed; font-size: 11px; font-weight: 700; }
+        QLabel#imagePath { color: #f4f7fb; font-size: 14px; font-weight: 600; }
+        QLabel#status { color: #c2cedb; font-size: 12px; padding: 4px 2px; }
+        QLabel#status[tone="success"] { color: #8ed5b0; }
+        QLabel#status[tone="warning"] { color: #e8c278; }
+        QLabel#status[tone="problem"] { color: #ef9aa4; }
+        QPushButton { background: #202b39; border: 1px solid #344357; border-radius: 6px;
+            color: #e6edf5; font-weight: 600; min-height: 20px; padding: 8px 13px; }
+        QPushButton:hover { background: #2a394b; border-color: #526a84; }
+        QPushButton:pressed { background: #18222e; }
+        QPushButton:focus, QComboBox:focus, QLineEdit:focus, QListWidget:focus {
+            border: 1px solid #55a8eb; }
+        QPushButton:disabled { background: #171f29; border-color: #252f3c; color: #748193; }
+        QPushButton#analyzeButton, QPushButton#extractButton {
+            background: #1769aa; border-color: #2d85c8; color: #ffffff; }
+        QPushButton#analyzeButton:hover, QPushButton#extractButton:hover {
+            background: #217fca; }
+        QProgressBar { background: #1a2531; border: none; border-radius: 3px;
+            min-height: 5px; max-height: 5px; }
+        QProgressBar::chunk { background: #39a2e8; border-radius: 3px; }
+        QSplitter#workspace::handle { background: #0c1118; }
+        QSplitter#workspace::handle:hover { background: #30455d; }
+        QScrollArea#leftScroll, QScrollArea#resultsScroll { background: transparent; border: none; }
+        QScrollArea#leftScroll > QWidget > QWidget,
         QScrollArea#resultsScroll > QWidget > QWidget { background: transparent; }
-        QFrame#resultCard { background: #111923; border: 1px solid #2a3b4d; border-radius: 9px; }
-        QFrame#resultCard[tone="success"] { background: #10231e; border-color: #2b8862; }
-        QFrame#resultCard[tone="warning"] { background: #2b2113; border-color: #b47b2f; }
-        QFrame#resultCard[tone="success"] QLabel#resultTitle { color: #a9edcc; }
-        QFrame#resultCard[tone="warning"] QLabel#resultTitle { color: #ffd18a; }
-        QFrame#resultCard[tone="problem"] { background: #2d1417; border-color: #c04b55; }
-        QFrame#resultCard[tone="problem"] QLabel#resultTitle { color: #ffb3b9; }
-        QLabel#rowLabel { color: #8fa3b8; font-size: 13px; }
-        QLabel#rowValue { color: #e3ecf5; font-size: 14px; }
-        QLabel#rowTech { color: #7f93a8; font-size: 12px; }
-        QCheckBox#detailsToggle { color: #a8c9e9; font-size: 13px; }
-        QCheckBox { color: #a8c9e9; }
-        QComboBox, QLineEdit, QListWidget { background: #0c1118; border: 1px solid #273747;
-            border-radius: 5px; color: #e3ecf5; padding: 6px; }
-        QListWidget::item:selected { background: #236a9f; }
-        QLabel#resultTitle { color: #edf5fc; font-size: 16px; font-weight: 700; }
-        QLabel#resultContent { color: #c4d1df; font-size: 14px; line-height: 1.35; }
-        QToolButton#rawLogToggle { color: #a8c9e9; border: none; font-size: 13px;
-            font-weight: 600; padding: 7px 0; text-align: left; }
-        QPlainTextEdit#rawLog { background: #0c1118; border: 1px solid #273747; border-radius: 6px;
-            color: #d9e5f0; font-family: monospace; font-size: 13px; padding: 10px; }
+        QFrame#resultCard { background: #101720; border: 1px solid #273544; border-radius: 8px; }
+        QFrame#resultCard[tone="success"] { background: #10241d; border-color: #2c7959; }
+        QFrame#resultCard[tone="warning"] { background: #292116; border-color: #9b7134; }
+        QFrame#resultCard[tone="success"] QLabel#resultTitle { color: #a9e8c8; }
+        QFrame#resultCard[tone="warning"] QLabel#resultTitle { color: #f5cd87; }
+        QFrame#resultCard[tone="problem"] { background: #2a171b; border-color: #a94755; }
+        QFrame#resultCard[tone="problem"] QLabel#resultTitle { color: #f2aeb5; }
+        QLabel#rowLabel { color: #91a2b5; font-size: 12px; }
+        QLabel#rowValue { color: #e1e9f2; font-size: 13px; }
+        QLabel#rowTech { color: #8293a7; font-size: 11px; }
+        QCheckBox#detailsToggle, QCheckBox { color: #b8c9dc; spacing: 7px; }
+        QCheckBox::indicator { width: 15px; height: 15px; }
+        QComboBox, QLineEdit, QListWidget {
+            background: #0d141c; border: 1px solid #2b394a; border-radius: 5px;
+            color: #e1e9f2; padding: 7px; }
+        QComboBox QAbstractItemView { background: #141c26; color: #e1e9f2;
+            selection-background-color: #1769aa; }
+        QListWidget::item { min-height: 26px; padding: 4px; border-radius: 4px; }
+        QListWidget::item:selected { background: #174b73; color: #ffffff; }
+        QLabel#resultTitle { color: #eaf1f8; font-size: 14px; font-weight: 700; }
+        QLabel#resultContent { color: #bfccd9; font-size: 12px; }
+        QToolButton#rawLogToggle { color: #9ec9ed; border: none; font-size: 12px;
+            font-weight: 600; padding: 6px 0; text-align: left; }
+        QPlainTextEdit#rawLog { background: #0b1016; border: 1px solid #273544; border-radius: 6px;
+            color: #d4dfeb; font-family: monospace; font-size: 12px; padding: 8px; }
     )");
 
     connect(chooseButton_, &QPushButton::clicked, this, &MainWindow::chooseImage);
@@ -282,6 +348,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(destinationButton_, &QPushButton::clicked, this, &MainWindow::chooseOutputDirectory);
     connect(reportButton_, &QPushButton::clicked, this, &MainWindow::exportCaseReport);
     connect(refreshCandidatesButton_, &QPushButton::clicked, this, &MainWindow::refreshCandidates);
+    connect(upDirectoryButton_, &QPushButton::clicked, this, &MainWindow::navigateUp);
     connect(extractButton_, &QPushButton::clicked, this, &MainWindow::extractSelectedCandidate);
     connect(partitionSelector_, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::refreshCandidates);
@@ -304,6 +371,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::extractionFinished);
     connect(manifestWatcher_, &QFutureWatcher<QString>::finished,
             this, &MainWindow::manifestWriteFinished);
+    connect(candidatesWatcher_, &QFutureWatcher<CandidateLoadResult>::finished,
+            this, &MainWindow::candidatesFinished);
     connect(rawLogToggle_, &QToolButton::toggled, this, &MainWindow::toggleRawLog);
     connect(detailsToggle_, &QCheckBox::toggled, this, &MainWindow::toggleDetails);
 
@@ -329,7 +398,10 @@ void MainWindow::chooseImage() {
         automaticManifestPath_.clear();
         candidateList_->clear();
         partitionSelector_->clear();
-        status_->setText("Image selected — ready for read-only inspection.");
+        rawLog_->clear();
+        clearResults();
+        addResultCard("Image selected", "Select Analyze image to inspect this disk image read-only.");
+        setStatusMessage("Image selected — ready for read-only inspection.");
         updateWorkflowState();
     }
 }
@@ -337,7 +409,7 @@ void MainWindow::chooseImage() {
 void MainWindow::updateWorkflowState() {
     const bool haveImage = !selectedImagePath_.isEmpty();
     const bool busy = inspectionWatcher_->isRunning() || extractionWatcher_->isRunning()
-        || manifestWatcher_->isRunning();
+        || manifestWatcher_->isRunning() || candidatesWatcher_->isRunning();
     const bool canBrowse = haveReport_ && report_.succeeded() && !busy
         && partitionSelector_->count() != 0;
     chooseButton_->setEnabled(!busy);
@@ -347,6 +419,7 @@ void MainWindow::updateWorkflowState() {
     partitionSelector_->setEnabled(canBrowse);
     candidatePath_->setEnabled(canBrowse);
     refreshCandidatesButton_->setEnabled(canBrowse);
+    upDirectoryButton_->setEnabled(canBrowse && currentDirectory_ != "/");
     showDeleted_->setEnabled(canBrowse);
     candidateList_->setEnabled(canBrowse);
     const QListWidgetItem* selectedCandidate = candidateList_->currentItem();
@@ -364,6 +437,13 @@ void MainWindow::updateWorkflowState() {
     workflowProgress_->setVisible(haveImage);
 }
 
+void MainWindow::setStatusMessage(const QString& message, const QString& tone) {
+    status_->setText(message);
+    status_->setProperty("tone", tone);
+    status_->style()->unpolish(status_);
+    status_->style()->polish(status_);
+}
+
 void MainWindow::chooseOutputDirectory() {
     QString directory = QFileDialog::getExistingDirectory(
         this,
@@ -377,10 +457,11 @@ void MainWindow::chooseOutputDirectory() {
             saved = saveAutomaticManifest();
         }
         updateWorkflowState();
-        status_->setText(haveReport_
+        setStatusMessage(haveReport_
                              ? (saved ? "Saving investigation manifest to " + automaticManifestPath_
                                       : "Could not start saving the investigation manifest.")
-                             : "Output directory ready — the investigation manifest will be saved after inspection.");
+                             : "Output directory ready — the investigation manifest will be saved after inspection.",
+                         saved ? QString() : QStringLiteral("problem"));
     }
 }
 
@@ -414,7 +495,7 @@ void MainWindow::analyzeImage() {
 
 void MainWindow::inspectImage(const QString& imagePath) {
     selectedImage_->setText(imagePath);
-    status_->setText("Inspecting read-only…");
+    setStatusMessage("Inspecting read-only…");
     rawReport_.clear();
     rawLog_->clear();
     rawLogToggle_->setChecked(false);
@@ -443,9 +524,10 @@ void MainWindow::inspectionFinished() {
     populateFileSystems();
     const bool saveStarted = saveAutomaticManifest();
     updateWorkflowState();
-    status_->setText(saveStarted
+    setStatusMessage(saveStarted
         ? "Inspection complete — saving investigation manifest to " + automaticManifestPath_
-        : "Could not start saving the investigation manifest. Check the selected output folder.");
+        : "Could not start saving the investigation manifest. Check the selected output folder.",
+        saveStarted ? QString() : QStringLiteral("problem"));
     renderResults(report);
 }
 
@@ -468,6 +550,7 @@ void MainWindow::loadImage(const QString& imagePath) {
 }
 
 void MainWindow::populateFileSystems() {
+    const QSignalBlocker blocker(partitionSelector_);
     partitionSelector_->clear();
     for (const filerelic::PartitionInfo& partition : report_.partitions) {
         if (partition.file_system.kind != filerelic::FileSystemKind::ext_family
@@ -482,7 +565,10 @@ void MainWindow::populateFileSystems() {
     candidatePath_->setText(currentDirectory_);
     candidateList_->clear();
     if (partitionSelector_->count() == 0 && report_.succeeded()) {
-        status_->setText("Inspection complete — no supported ext partition is available to browse.");
+        setStatusMessage("Inspection complete — no supported ext partition is available to browse.",
+                         "warning");
+    } else if (partitionSelector_->count() != 0 && report_.succeeded()) {
+        refreshCandidates();
     }
 }
 
@@ -501,12 +587,32 @@ void MainWindow::refreshCandidates() {
 
     const auto image = nativePath(selectedImagePath_);
     const auto partition = partitionSelector_->currentData().toULongLong();
-    const auto listing = filerelic::list_path(image, partition, path.toStdString());
+    const bool includeDeleted = showDeleted_->isChecked();
+    pendingBrowsePath_ = path;
+    setStatusMessage(includeDeleted ? "Loading folder and deleted-name candidates…"
+                                    : "Loading folder…");
+    candidatesWatcher_->setFuture(QtConcurrent::run([image, partition, path, includeDeleted] {
+        CandidateLoadResult result;
+        result.live = filerelic::list_path(image, partition, path.toStdString());
+        result.included_deleted = includeDeleted;
+        if (includeDeleted && result.live.ok
+            && result.live.kind == filerelic::InodeKind::directory) {
+            result.deleted = filerelic::list_deleted_path(image, partition, path.toStdString());
+        }
+        return result;
+    }));
+    updateWorkflowState();
+}
+
+void MainWindow::candidatesFinished() {
+    const CandidateLoadResult loaded = candidatesWatcher_->result();
+    const QString path = pendingBrowsePath_;
+    const auto& listing = loaded.live;
     if (!listing.ok) {
         auto* item = new QListWidgetItem("Could not list folder: " + QString::fromStdString(listing.error),
                                          candidateList_);
         item->setFlags(Qt::NoItemFlags);
-        status_->setText("Could not read the selected folder; see the message in the file list.");
+        setStatusMessage("Could not read the selected folder; see the message in the file list.", "problem");
         updateWorkflowState();
         return;
     }
@@ -529,14 +635,15 @@ void MainWindow::refreshCandidates() {
             label += "  (" + QString::fromStdString(filerelic::format_size_short(*entry.inode.size_bytes)) + ")";
         }
         auto* item = new QListWidgetItem(label, candidateList_);
+        item->setIcon(style()->standardIcon(directory ? QStyle::SP_DirIcon : QStyle::SP_FileIcon));
         item->setData(candidate_path_role, fullPath);
         item->setData(candidate_inode_role, entry.inode_number);
         item->setData(candidate_deleted_role, false);
         item->setData(candidate_directory_role, directory);
     }
 
-    if (showDeleted_->isChecked()) {
-        const auto deleted = filerelic::list_deleted_path(image, partition, path.toStdString());
+    if (loaded.included_deleted) {
+        const auto& deleted = loaded.deleted;
         if (!deleted.ok) {
             auto* item = new QListWidgetItem("Deleted names unavailable: " + QString::fromStdString(deleted.error),
                                              candidateList_);
@@ -549,6 +656,7 @@ void MainWindow::refreshCandidates() {
                 QString label = "[Deleted candidate] " + QString::fromStdString(entry.name)
                     + " — " + QString::fromStdString(filerelic::describe_deleted_status(entry.status));
                 auto* item = new QListWidgetItem(label, candidateList_);
+                item->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
                 item->setData(candidate_path_role, fullPath);
                 item->setData(candidate_inode_role, entry.inode_number);
                 item->setData(candidate_deleted_role, true);
@@ -571,8 +679,18 @@ void MainWindow::refreshCandidates() {
         auto* item = new QListWidgetItem("No entries in this folder.", candidateList_);
         item->setFlags(Qt::NoItemFlags);
     }
-    status_->setText("Folder loaded — select a file, folder, or deleted-name candidate.");
+    setStatusMessage("Folder loaded — select an item to extract; double-click a folder to open it.",
+                     "success");
     updateWorkflowState();
+}
+
+void MainWindow::navigateUp() {
+    QString path = candidatePath_->text().trimmed();
+    while (path.size() > 1 && path.endsWith('/')) path.chop(1);
+    const qsizetype separator = path.lastIndexOf('/');
+    path = separator <= 0 ? "/" : path.left(separator);
+    candidatePath_->setText(path);
+    refreshCandidates();
 }
 
 void MainWindow::extractSelectedCandidate() {
@@ -589,7 +707,7 @@ void MainWindow::extractSelectedCandidate() {
     const std::uint64_t partition = partitionSelector_->currentData().toULongLong();
     const std::string sourcePath = pendingExtractionPath_.toStdString();
     const bool deleted = pendingExtractionDeleted_;
-    status_->setText("Extracting selected item to the chosen output folder…");
+    setStatusMessage("Extracting selected item to the chosen output folder…");
     workflowProgress_->setRange(0, 0);
     extractionWatcher_->setFuture(QtConcurrent::run(
         [image, outputDirectory, partition, sourcePath, inodeNumber, deleted, isDirectory] {
@@ -649,13 +767,13 @@ void MainWindow::extractionFinished() {
     updateWorkflowState();
     refreshCandidates();
     if (!manifestSaveStarted) {
-        status_->setText("Extraction finished, but could not start updating the investigation manifest.");
+        setStatusMessage("Extraction finished, but could not start updating the investigation manifest.", "problem");
     } else if (result.read.status == filerelic::ReadStatus::complete) {
-        status_->setText("Extraction complete — saving result and SHA-256 to the investigation manifest.");
+        setStatusMessage("Extraction complete — saving result and SHA-256 to the investigation manifest.", "success");
     } else if (result.read.status == filerelic::ReadStatus::partial) {
-        status_->setText("Extraction is PARTIAL — saving result and notes to the investigation manifest.");
+        setStatusMessage("Extraction is PARTIAL — saving result and notes to the investigation manifest.", "warning");
     } else {
-        status_->setText("Extraction failed — details are recorded in the investigation manifest.");
+        setStatusMessage("Extraction failed — details are recorded in the investigation manifest.", "problem");
     }
 }
 
@@ -685,7 +803,7 @@ void MainWindow::startManifestWrite(const QString& path,
         return filerelic::write_case_manifest_json(report, output, manifestOptions)
             ? path : QString();
     }));
-    status_->setText(automatic ? "Saving investigation manifest…" : "Exporting case manifest…");
+    setStatusMessage(automatic ? "Saving investigation manifest…" : "Exporting case manifest…");
     updateWorkflowState();
 }
 
@@ -693,9 +811,9 @@ void MainWindow::manifestWriteFinished() {
     const QString writtenPath = manifestWatcher_->result();
     if (writtenPath.isEmpty()) {
         if (pendingManifestAutomatic_) automaticManifestPath_.clear();
-        status_->setText("Could not write the case manifest. Check the output path and permissions.");
+        setStatusMessage("Could not write the case manifest. Check the output path and permissions.", "problem");
     } else {
-        status_->setText("Case manifest saved to " + writtenPath);
+        setStatusMessage("Case manifest saved to " + writtenPath, "success");
     }
     updateWorkflowState();
 }

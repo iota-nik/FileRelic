@@ -9,6 +9,12 @@
 #include "image_inspector.h"
 #include "volume_access.h"
 
+struct CandidateLoadResult {
+    filerelic::ListingResult live;
+    filerelic::DeletedListingResult deleted;
+    bool included_deleted = false;
+};
+
 class QComboBox;
 class QCheckBox;
 class QLabel;
@@ -16,6 +22,7 @@ class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QSplitter;
 class QToolButton;
 class QVBoxLayout;
 class QWidget;
@@ -34,10 +41,12 @@ private slots:
     void chooseOutputDirectory();
     void exportCaseReport();
     void refreshCandidates();
+    void navigateUp();
     void extractSelectedCandidate();
     void inspectionFinished();
     void extractionFinished();
     void manifestWriteFinished();
+    void candidatesFinished();
     void toggleRawLog(bool visible);
     void toggleDetails(bool shown);
 
@@ -48,6 +57,7 @@ private:
     void addSectionCard(const filerelic::ReportSection& section);
     void addResultCard(const QString& title, const QString& content, const QString& tone = {});
     void updateWorkflowState();
+    void setStatusMessage(const QString& message, const QString& tone = {});
     bool saveAutomaticManifest();
     void startManifestWrite(const QString& path,
                             const filerelic::CaseManifestOptions& options,
@@ -62,6 +72,7 @@ private:
     QPushButton* reportButton_;
     QPushButton* destinationButton_;
     QPushButton* refreshCandidatesButton_;
+    QPushButton* upDirectoryButton_;
     QPushButton* extractButton_;
     QComboBox* partitionSelector_;
     QLineEdit* candidatePath_;
@@ -77,12 +88,14 @@ private:
     QFutureWatcher<filerelic::InspectionReport>* inspectionWatcher_;
     QFutureWatcher<filerelic::ExtractionResult>* extractionWatcher_;
     QFutureWatcher<QString>* manifestWatcher_;
+    QFutureWatcher<CandidateLoadResult>* candidatesWatcher_;
     QString selectedImagePath_;
     QString exportDirectory_;
     QString automaticManifestPath_;
     bool pendingManifestAutomatic_ = false;
     QString currentDirectory_ = "/";
     QString pendingExtractionPath_;
+    QString pendingBrowsePath_;
     bool pendingExtractionDeleted_ = false;
     bool pendingExtractionDirectory_ = false;
     QString rawReport_;

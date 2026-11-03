@@ -22,7 +22,9 @@ the GUI automatically saves inspection findings and records ext extraction outco
 The GUI browses ext directories, presents deleted-name candidates, and extracts
 selections to a separate destination. Cooperative cancellation, general file
 inventory, deleted-file recovery on other file systems, and cross-platform packaging
-remain future work. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
+remain future work. The Qt shell uses a resizable two-pane layout and asynchronous
+image, candidate, extraction, and report work; progress events and cancellation still
+need core job support. For the current order and next tasks see [ROADMAP.md](ROADMAP.md) and
 [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
 
 For the staged project outcome, working-project definition, and timing for specialist agents, see [ROADMAP.md](ROADMAP.md). The project begins with a small verifiable CLI core, grows into a shared recovery engine, and then adds the Qt desktop GUI and cross-platform packaging.

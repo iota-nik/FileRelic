@@ -54,7 +54,8 @@ warnings, diagnostics and presentation sections. Unknown values stay explicit
 `report.trace` is a step log for `filerelic inspect --verbose` and the GUI
 Advanced view. Results are never recovered from it.
 
-The GUI's inspection and extraction run on worker threads. Progress is shown as
+The GUI's inspection, candidate listing, extraction, and manifest writing run on
+worker threads. The workspace is a resizable two-pane layout. Progress is shown as
 indeterminate because the current core does not emit progress events; cancellation
 is intentionally unavailable until the core can stop work cooperatively.
 

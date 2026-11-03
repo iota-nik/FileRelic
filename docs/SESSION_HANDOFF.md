@@ -44,6 +44,8 @@ Working:
   extraction, and automatic JSON investigation-manifest saving. The manifest is updated with
   each extraction's status, output path, byte count, SHA-256, and notes. Progress is honestly
   indeterminate; no cancel button is shown because the core cannot cooperatively cancel yet.
+  The workspace is a resizable two-pane layout with scrollable controls/results, themed status
+  states, keyboard shortcuts, and asynchronous candidate listing to keep the UI responsive.
 - Case manifest/report layer: a shared `src/case_manifest.*` helper writes a versioned JSON manifest
   from the `InspectionReport` and GUI action records; the CLI exposes `filerelic report <image> [output.json]`.
 - NTFS adapter contract: a conservative `src/ntfs_adapter.*` status module documents the current design

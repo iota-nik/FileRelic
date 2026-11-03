@@ -18,7 +18,9 @@ a log only: no card reads it.
 - Records each extraction's status, output path, byte count, SHA-256, and notes in the same manifest.
 - Shows indeterminate progress while inspection or extraction is running; the core does not yet support cooperative cancellation, so there is no cancel control.
 - Still offers manual manifest export as a separate copy.
-- Runs the inspection off the UI thread so the window stays responsive.
+- Loads folder/deleted-name results asynchronously so large images do not freeze the window while browsing.
+- Uses a resizable two-pane workspace, scrollable controls/results, clear success/warning/error colors, keyboard focus states, and Ctrl+O/F5 shortcuts.
+- Runs inspection, extraction, manifest writing, and candidate reads off the UI thread so the window stays responsive.
 
 The GUI writes reports and recovered files only to the selected output directory, never
 to the image. Deleted-name entries are candidates, not promises of successful recovery.
