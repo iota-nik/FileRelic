@@ -207,8 +207,8 @@ MainWindow::MainWindow(QWidget* parent)
     candidateControls->addStretch();
     candidateControls->addWidget(extractButton_);
     browserLayout->addLayout(candidateControls);
-    candidateList_->setMinimumHeight(100);
-    candidateList_->setMaximumHeight(160);
+    candidateList_->setMinimumHeight(180);
+    candidateList_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     candidateList_->setUniformItemSizes(true);
     candidateList_->setEnabled(false);
     browserLayout->addWidget(candidateList_);
@@ -330,11 +330,18 @@ MainWindow::MainWindow(QWidget* parent)
         QCheckBox::indicator { width: 15px; height: 15px; }
         QComboBox, QLineEdit, QListWidget {
             background: #0d141c; border: 1px solid #2b394a; border-radius: 5px;
-            color: #e1e9f2; padding: 7px; }
+            color: #dce5ef; padding: 7px;
+            alternate-background-color: #121b25;
+            selection-background-color: #245174;
+            selection-color: #f4f8fc; }
         QComboBox QAbstractItemView { background: #141c26; color: #e1e9f2;
             selection-background-color: #1769aa; }
-        QListWidget::item { min-height: 26px; padding: 4px; border-radius: 4px; }
-        QListWidget::item:selected { background: #174b73; color: #ffffff; }
+        QListWidget::item { background: #0d141c; color: #dce5ef;
+            min-height: 26px; padding: 4px; border-radius: 4px; }
+        QListWidget::item:alternate { background: #121b25; color: #dce5ef; }
+        QListWidget::item:disabled { background: #17212c; color: #91a0b1; }
+        QListWidget::item:selected { background: #245174; color: #f4f8fc; }
+        QListWidget::item:selected:!active { background: #1d405c; color: #eef4fa; }
         QLabel#resultTitle { color: #eaf1f8; font-size: 14px; font-weight: 700; }
         QLabel#resultContent { color: #bfccd9; font-size: 12px; }
         QToolButton#rawLogToggle { color: #9ec9ed; border: none; font-size: 12px;

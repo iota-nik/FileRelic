@@ -20,6 +20,7 @@ a log only: no card reads it.
 - Still offers manual manifest export as a separate copy.
 - Loads folder/deleted-name results asynchronously so large images do not freeze the window while browsing.
 - Uses a resizable two-pane workspace, scrollable controls/results, clear success/warning/error colors, keyboard focus states, and Ctrl+O/F5 shortcuts.
+- Styles all candidate-list states explicitly (normal, alternating, selected, and informational/disabled rows) so system-default white rows do not break dark-theme readability; the list expands to use the available panel space.
 - Runs inspection, extraction, manifest writing, and candidate reads off the UI thread so the window stays responsive.
 
 The GUI writes reports and recovered files only to the selected output directory, never
